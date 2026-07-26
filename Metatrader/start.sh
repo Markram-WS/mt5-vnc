@@ -1,0 +1,232 @@
+#!/bin/bash
+# Custom MT5 start.sh with command-line authentication, API toggle, log monitoring
+# Incorporates MT5 installation logic from base image
+# Wine prefix must be pre-initialized during Docker build (build layers use overlayfs, not exFAT)
+
+# Configuration variables - use WINEPREFIX from environment or default
+export WINEPREFIX="${WINEPREFIX:-/opt/mt5-prefix}"
+export WINEDLLOVERRIDES="winemenubuilder.exe=d"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+export XDG_DATA_HOME="${XDG_DATA_HOME:-/config/.local/share}"
+
+wine_executable="wine"
+WINEDEBUG='-all'
+mt5file="${WINEPREFIX}/drive_c/Program Files/MetaTrader 5/terminal64.exe"
+metatrader_version="5.0.36"
+mt5server_port="${mt5server_port:-8001}"
+
+# Download URLs
+mono_url="https://dl.winehq.org/wine/wine-mono/10.3.0/wine-mono-10.3.0-x86.msi"
+python_url="https://www.python.org/ftp/python/3.9.13/python-3.9.13.exe"
+mt5setup_url="https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe"
+
+# Environment Variables with Defaults
+COMPANY_ENV="${COMPANY_ENV:-production}"
+COMPANY_REGION="${COMPANY_REGION:-us-east-1}"
+MT5_BROKER_SERVER="${MT5_BROKER_SERVER:-}"
+MT5_BROKER_PORT="${MT5_BROKER_PORT:-443}"
+MT5_SERVER="${MT5_SERVER:-}"
+MT5_ACCOUNT="${MT5_ACCOUNT:-}"
+MT5_PASSWORD="${MT5_PASSWORD:-}"
+ENABLE_MT5LINUX_API="${ENABLE_MT5LINUX_API:-true}"
+
+show_message() { echo "$1"; }
+
+check_dependency() {
+    if ! command -v "$1" &> /dev/null; then
+        echo "$1 is not installed. Please install it to continue."
+        exit 1
+    fi
+}
+
+is_python_package_installed() {
+    python3 -c "import pkg_resources; exit(not pkg_resources.require('$1'))" 2>/dev/null
+    return $?
+}
+
+is_wine_python_package_installed() {
+    $wine_executable python -c "import pkg_resources; exit(not pkg_resources.require('$1'))" 2>/dev/null
+    return $?
+}
+
+echo "[start.sh] === MT5 Startup ==="
+echo "[start.sh] Wine prefix: $WINEPREFIX"
+echo "[start.sh] MT5 binary: $mt5file"
+
+check_dependency "curl"
+check_dependency "$wine_executable"
+
+mkdir -p "$WINEPREFIX"
+
+if [ ! -f "${WINEPREFIX}/system.reg" ]; then
+    echo "[start.sh] Initializing Wine prefix..."
+    $wine_executable wineboot -u 2>/dev/null || true
+    sleep 5
+    for i in $(seq 60); do
+        if [ -f "${WINEPREFIX}/system.reg" ]; then
+            break
+        fi
+        sleep 2
+    done
+    echo "[start.sh] Wine prefix initialized"
+fi
+
+# Install Mono if not present
+if [ ! -e "${WINEPREFIX}/drive_c/windows/mono" ]; then
+    show_message "[start.sh] [1/7] Downloading and installing Mono..."
+    curl -L -o "${WINEPREFIX}/drive_c/mono.msi" "$mono_url" 2>&1
+    if [ -f "${WINEPREFIX}/drive_c/mono.msi" ]; then
+        WINEDLLOVERRIDES=mscoree=d $wine_executable msiexec /i "${WINEPREFIX}/drive_c/mono.msi" /qn
+        rm -f "${WINEPREFIX}/drive_c/mono.msi"
+        show_message "[start.sh] [1/7] Mono installed."
+    else
+        show_message "[start.sh] [1/7] Mono download failed, skipping."
+    fi
+else
+    show_message "[start.sh] [1/7] Mono is already installed."
+fi
+
+# Check if MetaTrader 5 is already installed
+if [ -e "$mt5file" ]; then
+    show_message "[start.sh] [2/7] File $mt5file already exists."
+else
+    show_message "[start.sh] [2/7] File $mt5file is not installed. Installing..."
+    $wine_executable reg add "HKEY_CURRENT_USER\\Software\\Wine" /v Version /t REG_SZ /d "win10" /f
+    show_message "[start.sh] [3/7] Downloading MT5 installer..."
+    curl -L -o "${WINEPREFIX}/drive_c/mt5setup.exe" "$mt5setup_url" 2>&1
+    if [ -f "${WINEPREFIX}/drive_c/mt5setup.exe" ]; then
+        show_message "[start.sh] [3/7] Installing MetaTrader 5..."
+        $wine_executable "${WINEPREFIX}/drive_c/mt5setup.exe" "/auto"
+        rm -f "${WINEPREFIX}/drive_c/mt5setup.exe"
+        show_message "[start.sh] [3/7] MT5 installation complete."
+    else
+        show_message "[start.sh] [3/7] MT5 download failed, skipping installation."
+    fi
+fi
+
+if [ ! -e "$mt5file" ]; then
+    show_message "[start.sh] ERROR: MT5 not found after installation at: $mt5file"
+fi
+
+show_message "[start.sh] MT5 found at: $mt5file"
+
+# Install Python in Wine if not present
+if ! $wine_executable python --version 2>/dev/null; then
+    show_message "[start.sh] [4/7] Installing Python in Wine..."
+    curl -L "$python_url" -o /tmp/python-installer.exe 2>&1
+    if [ -f /tmp/python-installer.exe ]; then
+        $wine_executable /tmp/python-installer.exe /quiet InstallAllUsers=1 PrependPath=1
+        rm -f /tmp/python-installer.exe
+        show_message "[start.sh] [4/7] Python installed in Wine."
+    else
+        show_message "[start.sh] [4/7] Python download failed, skipping."
+    fi
+else
+    show_message "[start.sh] [4/7] Python is already installed in Wine."
+fi
+
+# Install only MetaTrader5 and python-dateutil in Wine
+# Skip mt5linux/rpyc in Wine - they hang on pip download via Wine networking.
+# mt5linux server runs on Linux side, not in Wine.
+show_message "[start.sh] [5/7] Installing Python libraries in Wine"
+timeout 60 $wine_executable python -m pip install --upgrade --no-cache-dir pip 2>/dev/null || true
+
+if ! is_wine_python_package_installed "MetaTrader5==$metatrader_version"; then
+    timeout 120 $wine_executable python -m pip install --no-cache-dir MetaTrader5==$metatrader_version 2>/dev/null || true
+fi
+
+if ! is_wine_python_package_installed "python-dateutil"; then
+    timeout 60 $wine_executable python -m pip install --no-cache-dir python-dateutil 2>/dev/null || true
+fi
+
+# Install mt5linux library in Linux (this is the actual API server)
+show_message "[start.sh] [5/7] Installing mt5linux in Linux"
+if ! is_python_package_installed "mt5linux"; then
+    pip install --break-system-packages --no-cache-dir --no-deps mt5linux 2>/dev/null || true
+    pip install --break-system-packages --no-cache-dir rpyc plumbum numpy 2>/dev/null || true
+fi
+
+if ! is_python_package_installed "pyxdg"; then
+    pip install --break-system-packages --no-cache-dir pyxdg 2>/dev/null || true
+fi
+
+# Construct MT5 server address if not provided directly
+if [ -z "$MT5_SERVER" ] && [ -n "$MT5_BROKER_SERVER" ]; then
+    MT5_SERVER="${MT5_BROKER_SERVER}:${MT5_BROKER_PORT}"
+    echo "[start.sh] Constructed MT5 server address: $MT5_SERVER"
+fi
+
+# Conditional mt5linux API launch
+if [ "$ENABLE_MT5LINUX_API" = "true" ]; then
+    show_message "[start.sh] [6/7] Starting the mt5linux server on port $mt5server_port..."
+    python3 -m mt5linux --host 0.0.0.0 -p $mt5server_port &
+
+    sleep 5
+    if ss -tuln 2>/dev/null | grep ":$mt5server_port" > /dev/null; then
+        show_message "[start.sh] [6/7] The mt5linux server is running on port $mt5server_port."
+    else
+        show_message "[start.sh] [6/7] Failed to start the mt5linux server on port $mt5server_port."
+    fi
+else
+    show_message "[start.sh] [6/7] mt5linux API server disabled by ENABLE_MT5LINUX_API=$ENABLE_MT5LINUX_API"
+fi
+
+# Launch MT5 with command-line credentials if available
+if [ -n "$MT5_ACCOUNT" ] && [ -n "$MT5_PASSWORD" ] && [ -n "$MT5_SERVER" ]; then
+    show_message "[start.sh] [7/7] Starting MT5 with auto-login credentials for server: $MT5_SERVER"
+    show_message "[start.sh] [7/7] Account: $MT5_ACCOUNT"
+
+    if $wine_executable "$mt5file" /login:"$MT5_ACCOUNT" /password:"$MT5_PASSWORD" /server:"$MT5_SERVER" /portable; then
+        show_message "[start.sh] [7/7] MT5 started with command-line authentication"
+    else
+        show_message "[start.sh] [7/7] Command-line authentication failed, starting MT5 without credentials"
+        $wine_executable "$mt5file" /portable &
+    fi
+else
+    if [ -z "$MT5_ACCOUNT" ]; then show_message "[start.sh] [7/7] MT5_ACCOUNT not set"; fi
+    if [ -z "$MT5_PASSWORD" ]; then show_message "[start.sh] [7/7] MT5_PASSWORD not set"; fi
+    if [ -z "$MT5_SERVER" ]; then show_message "[start.sh] [7/7] MT5_SERVER not set"; fi
+    show_message "[start.sh] [7/7] Starting MT5 without auto-login (credentials incomplete)"
+    $wine_executable "$mt5file" /portable &
+fi
+
+# xdotool GUI auto-login (works with Xvfb or KasmVNC)
+# Required because MT5 build 3000+ dropped CLI /login: support
+if [ -n "$MT5_ACCOUNT" ] && [ -n "$MT5_PASSWORD" ] && [ -n "$MT5_SERVER" ]; then
+    show_message "[start.sh] [7/7] Attempting xdotool GUI auto-login..."
+    for attempt in $(seq 20); do
+        WID=$(DISPLAY=${DISPLAY:-:99} xdotool search --name "MetaTrader" 2>/dev/null | head -1)
+        if [ -n "$WID" ]; then
+            show_message "[start.sh] [7/7] Login window found, entering credentials..."
+            DISPLAY=${DISPLAY:-:99} xdotool windowactivate "$WID" 2>/dev/null
+            sleep 2
+            DISPLAY=${DISPLAY:-:99} xdotool key --delay 30 Ctrl+a
+            DISPLAY=${DISPLAY:-:99} xdotool type --delay 30 "$MT5_ACCOUNT"
+            DISPLAY=${DISPLAY:-:99} xdotool key Tab
+            DISPLAY=${DISPLAY:-:99} xdotool type --delay 30 "$MT5_PASSWORD"
+            DISPLAY=${DISPLAY:-:99} xdotool key Tab Tab
+            sleep 1
+            DISPLAY=${DISPLAY:-:99} xdotool type --delay 30 "$MT5_SERVER"
+            sleep 1
+            DISPLAY=${DISPLAY:-:99} xdotool key Return
+            show_message "[start.sh] [7/7] Login submitted for account $MT5_ACCOUNT"
+            break
+        fi
+        if [ $((attempt % 5)) -eq 0 ]; then
+            show_message "[start.sh] [7/7] Waiting for MT5 login window... (attempt $attempt/20)"
+        fi
+        sleep 3
+    done
+fi
+
+# Start comprehensive MT5 log monitoring
+if [ -f "/Metatrader/monitor-mt5-logs.sh" ]; then
+    echo "[start.sh] Starting comprehensive MT5 log monitoring"
+    bash /Metatrader/monitor-mt5-logs.sh &
+else
+    echo "[start.sh] MT5 log monitoring script not found at /Metatrader/monitor-mt5-logs.sh"
+fi
+
+echo "[start.sh] MT5 startup complete"
+
+wait

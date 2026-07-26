@@ -163,13 +163,13 @@ WINE REGISTRY Version 2
 [Software\\Wine\\DllOverrides] 1785038790
 #time=1dd1cb42362e260
 
-[Software\\Wine\\Fonts] 1785039020
-#time=1dd1cb4ac45ea64
+[Software\\Wine\\Fonts] 1785052065
+#time=1dd1cd30c28f52a
 "Codepages"="1252,437"
 "LogPixels"=dword:00000060
 
-[Software\\Wine\\Fonts\\External Fonts] 1785039020
-#time=1dd1cb4ac4852c2
+[Software\\Wine\\Fonts\\External Fonts] 1785052065
+#time=1dd1cd30c2b818c
 "C059-BdIta (TrueType)"="\\??\\unix\\usr\\share\\fonts\\opentype\\urw-base35\\C059-BdIta.otf"
 "C059-Bold (TrueType)"="\\??\\unix\\usr\\share\\fonts\\opentype\\urw-base35\\C059-Bold.otf"
 "C059-Italic (TrueType)"="\\??\\unix\\usr\\share\\fonts\\opentype\\urw-base35\\C059-Italic.otf"
@@ -487,11 +487,11 @@ WINE REGISTRY Version 2
 "Wingdings (TrueType)"="\\??\\unix\\opt\\wine-stable\\share\\wine\\fonts\\wingding.ttf"
 "Z003-MediumItalic (TrueType)"="\\??\\unix\\usr\\share\\fonts\\opentype\\urw-base35\\Z003-MediumItalic.otf"
 
-[Volatile Environment] 1785039009
-#time=1dd1cb4a61837dc
+[Volatile Environment] 1785051989
+#time=1dd1cd2de791a2e
 "CLIENTNAME"="Console"
 "HOMESHARE"=""
-"LOGONSERVER"="\\\\8763920037C9"
+"LOGONSERVER"="\\\\741D14976154"
 "SESSIONNAME"="Console"
-"USERDOMAIN"="8763920037C9"
+"USERDOMAIN"="741D14976154"
 "USERNAME"="root"

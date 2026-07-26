@@ -4,31 +4,50 @@ services:
     container_name: mt5_app
     restart: unless-stopped
     # -------------------------------------------------------------
-    # ⚙️ สลับโหมดตรงนี้:
-    # Dev  (มี VNC)      -> ["3000:3000", "8001:8001"] (พอร์ต 3000 เปิด Web VNC)
-    # Prod (Headless)   -> ["8001:8001"] (ปิดพอร์ต VNC / ให้เปิดเฉพาะ API/Python)
+    # ⚙️ Mode selection:
+    # Dev  (มี VNC)      -> ["3000:3000", "8001:8001"]
+    # Prod (Headless)   -> ["8001:8001"]
     # -------------------------------------------------------------
     ports:
-      - "3000:3000" # Web-VNC (เปิดใน Dev / ปิดหรือ block Firewall ใน Prod)
-      - "8001:8001" # พอร์ตสำหรับ Python / RPyC / ZeroMQ Interfacing
+      - "3000:3000"
+      - "8001:8001"
 
     environment:
+      # VNC Credentials (development mode)
       CUSTOM_USER: ${MT5_VNC_USER}
       PASSWORD: ${MT5_VNC_PASSWORD}
       VNC_RESOLUTION: "1280x800"
-      # ตัวเลือกสั่งรัน MT5 อัตโนมัติพร้อมโหลด Account Config
-      MT5_CMD_OPTIONS: '/config:C:\mt5_config.ini'
-      # Rootless Podman: ข้าม chown/usermod ที่ต้องใช้ root
+
+      # MT5 Credentials for auto-login
+      MT5_SERVER: ${MT5_SERVER:-}
+      MT5_ACCOUNT: ${MT5_ACCOUNT:-}
+      MT5_PASSWORD: ${MT5_PASSWORD:-}
+
+      # Company/Environment Configuration
+      COMPANY_ENV: ${COMPANY_ENV:-production}
+      COMPANY_REGION: ${COMPANY_REGION:-us-east-1}
+      MT5_BROKER_SERVER: ${MT5_BROKER_SERVER:-}
+      MT5_BROKER_PORT: ${MT5_BROKER_PORT:-443}
+
+      # API Configuration
+      ENABLE_MT5LINUX_API: ${ENABLE_MT5LINUX_API:-true}
+
+      # Mode Selection
+      HEADLESS: ${HEADLESS:-false}
+
+      # System Configuration
       LSIO_NON_ROOT_USER: "true"
 
     volumes:
-      # Mount Config/Data Directory เก็บข้อมูลบัญชี, EAs (.ex5), และการตั้งค่า
+      # Persistent config data
       - ./config:/config
-      # Mount EA หรือ Scripts ที่เขียนขึ้นเองเข้าไปใน MQL5
+      # Mount EA/Scripts into MT5 (Wine prefix is on overlayfs, not exFAT)
       - ./mql5:/opt/mt5-prefix/drive_c/Program Files/MetaTrader 5/MQL5/Experts
-    
+      # Optional: Mount MT5 logs to host for persistence
+      # - ./logs:/opt/mt5-prefix/drive_c/users/container/AppData/Roaming/MetaQuotes/Terminal
+
     shm_size: '256m'
     deploy:
       resources:
         limits:
-          memory: 1024M 
+          memory: 1024M

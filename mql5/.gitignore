@@ -1,0 +1,5 @@
+# Preserve mql5 directory structure
+# Add specific EAs or scripts here and remove their entries below to track them
+*
+*/
+!.gitignore

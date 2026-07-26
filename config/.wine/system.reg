@@ -53,8 +53,8 @@ WINE REGISTRY Version 2
 [Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders] 1785038790
 #time=1dd1cb423747c1e
 
-[Software\\Microsoft\\Windows\\CurrentVersion\\Fonts] 1785039020
-#time=1dd1cb4ac4851e6
+[Software\\Microsoft\\Windows\\CurrentVersion\\Fonts] 1785052065
+#time=1dd1cd30c2b8006
 "C059-BdIta (TrueType)"="\\??\\unix\\usr\\share\\fonts\\opentype\\urw-base35\\C059-BdIta.otf"
 "C059-Bold (TrueType)"="\\??\\unix\\usr\\share\\fonts\\opentype\\urw-base35\\C059-Bold.otf"
 "C059-Italic (TrueType)"="\\??\\unix\\usr\\share\\fonts\\opentype\\urw-base35\\C059-Italic.otf"
@@ -416,8 +416,8 @@ WINE REGISTRY Version 2
 "Yu Gothic UI Semibold"=str(7):"SEGUISB.TTF,Segoe UI Semibold\0MSJH.TTC,Microsoft Jhenghei UI\0MSYH.TTC,Microsoft YaHei\0MALGUN.TTF,Malgun Gothic\0SEGUISYM.TTF,Segoe UI Symbol\0"
 "Yu Gothic UI Semilight"=str(7):"SEGOEUISL.TTF,Segoe UI Semilight\0MSJH.TTC,Microsoft Jhenghei UI\0MSYH.TTC,Microsoft YaHei\0MALGUNSL.TTF,Malgun Gothic Semilight\0SEGUISYM.TTF,Segoe UI Symbol\0"
 
-[Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts] 1785039020
-#time=1dd1cb4ac485114
+[Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts] 1785052065
+#time=1dd1cd30c2b7f20
 "C059-BdIta (TrueType)"="\\??\\unix\\usr\\share\\fonts\\opentype\\urw-base35\\C059-BdIta.otf"
 "C059-Bold (TrueType)"="\\??\\unix\\usr\\share\\fonts\\opentype\\urw-base35\\C059-Bold.otf"
 "C059-Italic (TrueType)"="\\??\\unix\\usr\\share\\fonts\\opentype\\urw-base35\\C059-Italic.otf"
@@ -1268,9 +1268,9 @@ WINE REGISTRY Version 2
 [System\\ControlSet001\\Control\\Class\\{4D36E96E-E325-11CE-BFC1-08002BE10318}\\0000] 1785038790
 #time=1dd1cb4236f8e20
 
-[System\\ControlSet001\\Control\\ComputerName\\ComputerName] 1785039007
-#time=1dd1cb4a4a7b3a0
-"ComputerName"="8763920037C9"
+[System\\ControlSet001\\Control\\ComputerName\\ComputerName] 1785051988
+#time=1dd1cd2de14ad1e
+"ComputerName"="741D14976154"
 
 [System\\ControlSet001\\Control\\DeviceClasses\\{1CA05180-A699-450A-9A0C-DE4FBE3DDD89}\\##?#PCI#VEN_0005&DEV_0000&SUBSYS_00000000&REV_00#00000000#{1CA05180-A699-450A-9A0C-DE4FBE3DDD89}] 1785038790
 #time=1dd1cb4236f35d8
@@ -1378,10 +1378,10 @@ WINE REGISTRY Version 2
 "Start"=dword:00000000
 "Type"=dword:00000001
 
-[System\\ControlSet001\\Services\\Tcpip\\Parameters] 1785039007
-#time=1dd1cb4a4a7af68
+[System\\ControlSet001\\Services\\Tcpip\\Parameters] 1785051988
+#time=1dd1cd2de14a990
 "Domain"=""
-"Hostname"="8763920037c9"
+"Hostname"="741d14976154"
 
 [System\\CurrentControlSet] 1785038788
 #time=1dd1cb421fa9f44
