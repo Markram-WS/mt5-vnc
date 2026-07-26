@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="application/x-wine-extension-mt5">
+  <!--Created automatically by update-mime-database. DO NOT EDIT!-->
+  <glob pattern="*.mt5"/>
+  <comment>MetaTrader 5 Export</comment>
+</mime-type>

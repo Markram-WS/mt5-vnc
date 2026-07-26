@@ -1,0 +1,34 @@
+services:
+  mt5-node:
+    build: .
+    container_name: mt5_app
+    restart: unless-stopped
+    # -------------------------------------------------------------
+    # ⚙️ สลับโหมดตรงนี้:
+    # Dev  (มี VNC)      -> ["3000:3000", "8001:8001"] (พอร์ต 3000 เปิด Web VNC)
+    # Prod (Headless)   -> ["8001:8001"] (ปิดพอร์ต VNC / ให้เปิดเฉพาะ API/Python)
+    # -------------------------------------------------------------
+    ports:
+      - "3000:3000" # Web-VNC (เปิดใน Dev / ปิดหรือ block Firewall ใน Prod)
+      - "8001:8001" # พอร์ตสำหรับ Python / RPyC / ZeroMQ Interfacing
+
+    environment:
+      CUSTOM_USER: ${MT5_VNC_USER}
+      PASSWORD: ${MT5_VNC_PASSWORD}
+      VNC_RESOLUTION: "1280x800"
+      # ตัวเลือกสั่งรัน MT5 อัตโนมัติพร้อมโหลด Account Config
+      MT5_CMD_OPTIONS: '/config:C:\mt5_config.ini'
+      # Rootless Podman: ข้าม chown/usermod ที่ต้องใช้ root
+      LSIO_NON_ROOT_USER: "true"
+
+    volumes:
+      # Mount Config/Data Directory เก็บข้อมูลบัญชี, EAs (.ex5), และการตั้งค่า
+      - ./config:/config
+      # Mount EA หรือ Scripts ที่เขียนขึ้นเองเข้าไปใน MQL5
+      - ./mql5:/opt/mt5-prefix/drive_c/Program Files/MetaTrader 5/MQL5/Experts
+    
+    shm_size: '256m'
+    deploy:
+      resources:
+        limits:
+          memory: 1024M 

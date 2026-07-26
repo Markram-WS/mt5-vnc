@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=MetaTrader 5 Client Terminal
+MimeType=x-scheme-handler/mql5buy;
+Exec=env WINEPREFIX="/opt/mt5-prefix" wine start %u
+NoDisplay=true
+StartupNotify=true
+Icon=1967_terminal64.0

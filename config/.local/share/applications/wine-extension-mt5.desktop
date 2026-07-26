@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=MetaTrader 5 Client Terminal
+MimeType=application/x-wine-extension-mt5;
+Exec=env WINEPREFIX="/opt/mt5-prefix" wine start /ProgIDOpen MetaTrader\\ 5\\ Export\\ File %f
+NoDisplay=true
+StartupNotify=true
+Icon=1967_terminal64.0

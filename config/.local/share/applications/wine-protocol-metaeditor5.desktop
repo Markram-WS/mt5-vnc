@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=MetaEditor 5
+MimeType=x-scheme-handler/metaeditor5;
+Exec=env WINEPREFIX="/opt/mt5-prefix" wine start %u
+NoDisplay=true
+StartupNotify=true
+Icon=3F42_metaeditor64.0

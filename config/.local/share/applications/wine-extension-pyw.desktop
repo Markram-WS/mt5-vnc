@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Python
+MimeType=text/x-python;
+Exec=env WINEPREFIX="/opt/mt5-prefix" wine start /ProgIDOpen Python.NoConFile %f
+NoDisplay=true
+StartupNotify=true
+Icon=D465_pyw.0
