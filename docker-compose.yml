@@ -40,7 +40,7 @@ services:
 
     volumes:
       # Persistent config data
-      - vantage-config:/config
+      - mt5-prefix:/opt/mt5-prefix
       # Mount EA/Scripts into MT5 (Wine prefix is on overlayfs, not exFAT)
       - ./mql5:/opt/mt5-prefix/drive_c/Program Files/MetaTrader 5/MQL5/Experts
       # Optional: Mount MT5 logs to host for persistence
@@ -53,4 +53,4 @@ services:
           memory: 1024M
 
 volumes:
-  mt5-config:
+  mt5-prefix:
