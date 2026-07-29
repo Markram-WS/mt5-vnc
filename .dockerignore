@@ -1,0 +1,10 @@
+.git
+.gitignore
+.env
+*.md
+config/
+mql5/
+Tests/
+*.md
+.vscode/
+.idea/
