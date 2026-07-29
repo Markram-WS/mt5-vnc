@@ -12,7 +12,8 @@ MetaTrader 5 Docker container with support for both development (VNC) and produc
 - **MT5 Auto-Login**: CLI credentials + xdotool GUI auto-login fallback (MT5 build 3000+ dropped CLI auth support)
 - **Company Environment**: `COMPANY_ENV`, `COMPANY_REGION`, `MT5_BROKER_SERVER`, `MT5_BROKER_PORT`
 - **Comprehensive Log Monitoring**: Streams EA, System, Trading, Tester, and Indicator logs to container stdout
-- **MQL5 Volume Support**: Mount external Expert Advisors (EAs) from host
+- **MQL5 Volume**: `./mql5` bind mount → `/opt/mt5-prefix/drive_c/.../MQL5/Experts` (your EAs on exFAT)
+- **VNC Config**: `mt5-config` named volume → `/config` (persists VNC settings in Docker storage)
 - **Wine Prefix**: Pre-initialized on overlayfs during build (not on exFAT host mounts)
 - **Rootless Compatible**: Works with rootless Podman
 
@@ -93,7 +94,7 @@ podman logs -f mt5-headless
 
 | Host Path | Container Path | Purpose |
 |-----------|---------------|---------|
-| `./config` | `/config` | Persistent config, Openbox settings |
+| `mt5-config` | `/config` | VNC openbox config (Docker storage) |
 | `./mql5` | `/opt/mt5-prefix/drive_c/Program Files/MetaTrader 5/MQL5/Experts` | Expert Advisors |
 | `./logs` (optional) | `/opt/mt5-prefix/drive_c/users/container/AppData/Roaming/MetaQuotes/Terminal` | MT5 log persistence |
 
