@@ -1,9 +1,0 @@
-[Desktop Entry]
-Name=Python 3.9 Manuals (32-bit)
-Exec=env WINEPREFIX="/opt/mt5-prefix" wine C:\\\\users\\\\root\\\\AppData\\\\Roaming\\\\Microsoft\\\\Windows\\\\Start\\ Menu\\\\Programs\\\\Python\\ 3.9\\\\Python\\ 3.9\\ Manuals\\ \\(32-bit\\).lnk
-Type=Application
-StartupNotify=true
-Comment=View the Python 3.9 documentation.
-Path=/opt/mt5-prefix/dosdevices/c:/Program Files (x86)/Python39-32/
-Icon=D15F_hh.0
-StartupWMClass=hh.exe

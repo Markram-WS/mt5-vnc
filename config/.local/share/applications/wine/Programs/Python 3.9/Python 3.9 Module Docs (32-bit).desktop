@@ -1,9 +1,0 @@
-[Desktop Entry]
-Name=Python 3.9 Module Docs (32-bit)
-Exec=env WINEPREFIX="/opt/mt5-prefix" wine C:\\\\users\\\\root\\\\AppData\\\\Roaming\\\\Microsoft\\\\Windows\\\\Start\\ Menu\\\\Programs\\\\Python\\ 3.9\\\\Python\\ 3.9\\ Module\\ Docs\\ \\(32-bit\\).lnk
-Type=Application
-StartupNotify=true
-Comment=Start the Python 3.9 documentation server.
-Path=/opt/mt5-prefix/dosdevices/c:/Program Files (x86)/Python39-32/
-Icon=11CB_idle.0
-StartupWMClass=python.exe

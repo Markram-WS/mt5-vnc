@@ -1,8 +1,0 @@
-[Desktop Entry]
-Name=MetaEditor
-Exec=env WINEPREFIX="/opt/mt5-prefix" wine C:\\\\users\\\\root\\\\AppData\\\\Roaming\\\\Microsoft\\\\Windows\\\\Start\\ Menu\\\\Programs\\\\MetaTrader\\ 5\\\\MetaEditor.lnk
-Type=Application
-StartupNotify=true
-Path=/opt/mt5-prefix/dosdevices/c:/Program Files/MetaTrader 5
-Icon=3F42_metaeditor64.0
-StartupWMClass=metaeditor64.exe

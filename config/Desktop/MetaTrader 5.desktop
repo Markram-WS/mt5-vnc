@@ -1,8 +1,0 @@
-[Desktop Entry]
-Name=MetaTrader 5
-Exec=env WINEPREFIX="/opt/mt5-prefix" wine C:\\\\users\\\\Public\\\\Desktop\\\\MetaTrader\\ 5.lnk
-Type=Application
-StartupNotify=true
-Path=/opt/mt5-prefix/dosdevices/c:/Program Files/MetaTrader 5
-Icon=D0A6_terminal.0
-StartupWMClass=terminal64.exe

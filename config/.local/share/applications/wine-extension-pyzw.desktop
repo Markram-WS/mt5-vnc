@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Python
-MimeType=application/x-zip-compressed;
-Exec=env WINEPREFIX="/opt/mt5-prefix" wine start /ProgIDOpen Python.NoConArchiveFile %f
-NoDisplay=true
-StartupNotify=true
-Icon=D465_pyw.0
