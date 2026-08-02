@@ -12,63 +12,9 @@ MetaTrader 5 Docker container with support for both development (VNC) and produc
 - **MT5 Auto-Login**: CLI credentials + xdotool GUI auto-login fallback (MT5 build 3000+ dropped CLI auth support)
 - **Company Environment**: `COMPANY_ENV`, `COMPANY_REGION`, `MT5_BROKER_SERVER`, `MT5_BROKER_PORT`
 - **Comprehensive Log Monitoring**: Streams EA, System, Trading, Tester, and Indicator logs to container stdout
-- **MQL5 Volume**: `./mql5` bind mount → `/app/drive_c/.../MQL5/Experts` (your EAs on exFAT)
-- **MT5 Wine Prefix**: `mt5-prefix` named volume → `/app` (persists MT5 install across rebuilds)
+- **MQL5 Volume**: `./mql5` bind mount → `/config/.wine/drive_c/.../MQL5/Experts` (your EAs on exFAT)
+- **MT5 Wine Prefix**: `mt5-vantage` named volume → `/config/.wine` (persists MT5 install across rebuilds)
 - **VNC Config**: `vantage-config` named volume → `/config` (persists VNC/openbox settings across rebuilds)
-- **Wine Prefix**: Pre-initialized on overlayfs during build (not on exFAT host mounts)
-- **Rootless Compatible**: Works with rootless Podman
-
-## Quick Start
-
-### Prerequisites
-
-- Podman or Docker
-- For VNC access: VNC client (any browser-based VNC works with KasmVNC)
-
-### Setup
-
-```bash
-# Clone / navigate to project
-cd /media/wasan/Storage/mt5
-
-# Configure environment
-cp .env.example .env
-# Edit .env with your credentials
-
-# Build image
-podman build -t mt5-mt5-node .
-```
-
-### Dev Mode (VNC + API)
-
-```bash
-# Start container
-podman compose up -d
-
-# Access VNC
-# Open browser to: http://localhost:3000/vnc.html
-
-# Access mt5linux API
-import rpyc
-conn = rpyc.connect("localhost", 8001)
-# Use mt5linux API...
-conn.close()
-```
-
-### Headless Mode (API Only)
-
-```bash
-podman run -d --name mt5-headless \
-  -e HEADLESS=true \
-  -e MT5_SERVER="broker.example.com:443" \
-  -e MT5_ACCOUNT="12345678" \
-  -e MT5_PASSWORD="yourpass" \
-  -p 8001:8001 \
-  mt5-mt5-node
-
-# Check logs
-podman logs -f mt5-headless
-```
 
 ## Configuration
 
@@ -88,16 +34,16 @@ podman logs -f mt5-headless
 | `MT5_VNC_USER` | VNC username | Set in `.env` |
 | `MT5_VNC_PASSWORD` | VNC password | Set in `.env` |
 | `VNC_RESOLUTION` | VNC screen resolution | `1280x800` |
-| `WINEPREFIX` | Wine prefix path | `/app` |
+| `WINEPREFIX` | Wine prefix path | `/config/.wine` |
 | `WINEARCH` | Wine architecture | `win64` |
 
 ### Volume Mounts
 
 | Host Path | Container Path | Purpose |
 |-----------|---------------|---------|
-| `mt5-prefix` | `/app` | MT5 Wine prefix (persists install across rebuilds) |
-| `./mql5` | `/app/drive_c/Program Files/MetaTrader 5/MQL5/Experts` | Expert Advisors |
-| `./logs` (optional) | `/app/drive_c/users/container/AppData/Roaming/MetaQuotes/Terminal` | MT5 log persistence |
+| `mt5-vantage` | `/config/.wine` | MT5 Wine prefix (persists install across rebuilds) |
+| `./mql5` | `/config/.wine/drive_c/Program Files/MetaTrader 5/MQL5/Experts` | Expert Advisors |
+| `./logs` (optional) | `/config/.wine/drive_c/users/container/AppData/Roaming/MetaQuotes/Terminal` | MT5 log persistence |
 
 ### Ports
 
@@ -216,7 +162,7 @@ podman logs mt5-test | grep -E "auto-login|/login|/password|/server"
 podman run --rm --network host python:3.11 bash -c 'pip install rpyc -q && python3 -c "import rpyc; conn = rpyc.connect(\"127.0.0.1\", 8002); print(\"Connected\"); conn.close()"'
 
 # Verify MT5 binary
-podman exec mt5-test ls -la "/app/drive_c/Program Files/MetaTrader 5/terminal64.exe"
+podman exec mt5-test ls -la "/config/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe"
 
 podman rm -f mt5-test
 ```
@@ -264,7 +210,7 @@ podman port mt5_app
 
 ### Permission Denied on Downloads
 
-If you see `curl: (23) Failure writing output to destination`, the host filesystem (exFAT) doesn't support Wine prefix operations. Ensure the Wine prefix stays inside the container on overlayfs (do not mount `/app` as a host volume).
+If you see `curl: (23) Failure writing output to destination`, the host filesystem (exFAT) doesn't support Wine prefix operations. Ensure the Wine prefix stays inside the container on overlayfs (do not mount `/config/.wine` as a host volume).
 
 ### VNC Shows 401 Unauthorized
 
@@ -285,7 +231,7 @@ podman compose down && podman compose up -d
 ### MT5 Installer Fails
 
 ```bash
-podman exec mt5_app rm -rf /app
+podman exec mt5_app rm -rf /config/.wine
 podman restart mt5_app
 ```
 
@@ -298,7 +244,7 @@ A placeholder `Terminal.ico` is created if missing from the MT5 installation dir
 If the error persists, verify the icon file exists:
 
 ```bash
-podman exec mt5_app ls /app/drive_c/Program\ Files/MetaTrader\ 5/Terminal.ico
+podman exec mt5_app ls /config/.wine/drive_c/Program\ Files/MetaTrader\ 5/Terminal.ico
 ```
 
 ## Security Notes

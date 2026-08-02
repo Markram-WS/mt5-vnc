@@ -34,21 +34,22 @@ services:
 
       # Mode Selection
       HEADLESS: ${HEADLESS:-false}
+      WINEPREFIX: /config/.wine
 
       # System Configuration
       LSIO_NON_ROOT_USER: "true"
 
     # Guaranteed MT5 LiveUpdate block (compose injects these into /etc/hosts)
     extra_hosts:
-      - "update.mql5.com:127.0.0.1"
+      - "update.mql5.com:[IP_ADDRESS]"
 
     volumes:
-      # Persistent config data
-      - mt5-vantage:/app/drive_c/Program Files/MetaTrader 5/
+      # Persistent mt5
+      - mt5-vantage:/config/.wine/drive_c/Program Files/MetaTrader 5/
       # Mount EA/mt5Scripts into MT5 (Wine prefix is on overlayfs, not exFAT)
-      - ./mql5:/app/drive_c/Program Files/MetaTrader 5/MQL5/
+      - ./mql5:/config/.wine/drive_c/Program Files/MetaTrader 5/MQL5/
       # Persistent MT5 session data (accounts, logs, files)
-      - mt5-vantage-session:/app/drive_c/users/container/AppData/Roaming/MetaQuotes/Terminal
+      - mt5-vantage-session:/config/.wine/drive_c/users/container/AppData/Roaming/MetaQuotes/Terminal
 
     shm_size: '256m'
     deploy:

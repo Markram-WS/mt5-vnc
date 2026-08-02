@@ -19,7 +19,7 @@ RUN sed -i 's|http://127.0.0.1:6900;|http://127.0.0.1:6901;|g' /defaults/default
 RUN sed -i '/^# Run MT5 install/d' /defaults/startwm.sh
 
 # Pre-initialize Wine prefix in image layer (NOT on exFAT host mount)
-ENV WINEPREFIX=/app
+ENV WINEPREFIX=/config/.wine
 ENV WINEARCH=win64
 
 # Initialize Wine prefix during build (overlayfs supports symlinks/permissions)
@@ -30,7 +30,7 @@ RUN wineboot -u 2>/dev/null || true && \
     done
 
 # Make Wine prefix writable by abc user (container runs non-root for VNC)
-RUN chmod -R 777 /app
+RUN chmod -R 777 /config/.wine
 
 # Disable duplicate autostart (init-mt5 service already handles MT5 launch)
 RUN printf '' > /defaults/autostart
@@ -49,7 +49,9 @@ COPY Metatrader/headless.sh /Metatrader/headless.sh
 COPY Metatrader/monitor-mt5-logs.sh /Metatrader/monitor-mt5-logs.sh
 RUN chmod +x /Metatrader/start.sh /Metatrader/headless.sh /Metatrader/monitor-mt5-logs.sh
 
-# Create s6 init-mt5 service: wait for display, run start.sh
+# Create s6 init-mt5 service: wait for display, run start.sh as abc (user owning
+# /config/.wine prefix + X display). Output goes to a log file (s6 oneshot closes stdout
+# once the run script exits, which previously hid start.sh logs).
 RUN mkdir -p /etc/s6-overlay/s6-rc.d/init-mt5/dependencies.d && \
     printf '#!/usr/bin/with-contenv bash\nset -e\n\
 export DISPLAY=:1\n\
@@ -62,8 +64,9 @@ for i in $(seq 30); do\n\
 done\n\
 \n\
 if [ -f /Metatrader/start.sh ]; then\n\
-  echo "[init-mt5] Starting MT5 setup..."\n\
-  bash /Metatrader/start.sh 2>&1 | sed "s/^/[init-mt5] /" &\n\
+  echo "[init-mt5] Starting MT5 setup (log: /tmp/mt5-startup.log)..."\n\
+  touch /tmp/mt5-startup.log && chown abc:abc /tmp/mt5-startup.log\n\
+  s6-setuidgid abc /Metatrader/start.sh > /tmp/mt5-startup.log 2>&1 &\n\
   echo "[init-mt5] MT5 setup backgrounded."\n\
 fi\n' > /etc/s6-overlay/s6-rc.d/init-mt5/run && \
     chmod +x /etc/s6-overlay/s6-rc.d/init-mt5/run && \
