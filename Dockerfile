@@ -25,7 +25,7 @@ ENV WINEARCH=win64
 # Create /opt/mt5 directory before wineboot (volume doesn't exist during build)
 RUN mkdir -p "$WINEPREFIX"
 # Initialize Wine prefix during build (overlayfs supports symlinks/permissions)
-RUN wineboot -u 2>/dev/null || true && \
+RUN wineboot 2>/dev/null || true && \
     for i in $(seq 30); do \
       if [ -f "${WINEPREFIX}/system.reg" ]; then break; fi; \
       sleep 1; \
