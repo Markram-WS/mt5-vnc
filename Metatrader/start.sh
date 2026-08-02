@@ -67,10 +67,10 @@ check_dependency "curl"
 check_dependency "$wine_executable"
 
 mkdir -p "$WINEPREFIX"
+chown -R abc:abc "$WINEPREFIX" 2>/dev/null || true
 
 if [ ! -f "${WINEPREFIX}/system.reg" ]; then
-    echo "[start.sh] Initializing Wine prefix..."
-    $wine_executable wineboot -u 2>/dev/null || true
+    $wine_executable wineboot 2>/dev/null || true
     sleep 5
     for i in $(seq 60); do
         if [ -f "${WINEPREFIX}/system.reg" ]; then
@@ -86,7 +86,7 @@ if [ ! -e "${WINEPREFIX}/drive_c/windows/mono" ]; then
     show_message "[start.sh] [1/7] Downloading and installing Mono..."
     curl -L -o "${WINEPREFIX}/drive_c/mono.msi" "$mono_url" 2>&1
     if [ -f "${WINEPREFIX}/drive_c/mono.msi" ]; then
-        WINEDLLOVERRIDES=mscoree=d $wine_executable msiexec /i "${WINEPREFIX}/drive_c/mono.msi" /qn
+        $wine_executable msiexec /i "${WINEPREFIX}/drive_c/mono.msi" /qn
         rm -f "${WINEPREFIX}/drive_c/mono.msi"
         show_message "[start.sh] [1/7] Mono installed."
     else
