@@ -34,7 +34,7 @@ services:
 
       # Mode Selection
       HEADLESS: ${HEADLESS:-false}
-      WINEPREFIX: /config/.wine
+      WINEPREFIX: /opt/mt5
 
       # System Configuration
       LSIO_NON_ROOT_USER: "true"
@@ -45,11 +45,11 @@ services:
 
     volumes:
       # Persistent mt5
-      - mt5-vantage:/config/.wine/drive_c/Program Files/MetaTrader 5/
+      - mt5-vantage:/opt/mt5/drive_c/Program Files/MetaTrader 5/
       # Mount EA/mt5Scripts into MT5 (Wine prefix is on overlayfs, not exFAT)
-      - ./mql5:/config/.wine/drive_c/Program Files/MetaTrader 5/MQL5/
+      - ./mql5:/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/
       # Persistent MT5 session data (accounts, logs, files)
-      - mt5-vantage-session:/config/.wine/drive_c/users/container/AppData/Roaming/MetaQuotes/Terminal
+      - mt5-vantage-session:/opt/mt5/drive_c/users/container/AppData/Roaming/MetaQuotes/Terminal
 
     shm_size: '256m'
     deploy:

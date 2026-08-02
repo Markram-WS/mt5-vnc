@@ -5,7 +5,7 @@
 
 set -e
 
-WINEPREFIX="${WINEPREFIX:-/config/.wine}"
+WINEPREFIX="${WINEPREFIX:-/opt/mt5}"
 LOG_DIR_BASE="${WINEPREFIX}/drive_c/users/container/AppData/Roaming/MetaQuotes/Terminal"
 
 echo "[monitor-mt5-logs] Starting comprehensive MT5 log monitoring..."

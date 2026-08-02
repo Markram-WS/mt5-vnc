@@ -12,8 +12,8 @@ MetaTrader 5 Docker container with support for both development (VNC) and produc
 - **MT5 Auto-Login**: CLI credentials + xdotool GUI auto-login fallback (MT5 build 3000+ dropped CLI auth support)
 - **Company Environment**: `COMPANY_ENV`, `COMPANY_REGION`, `MT5_BROKER_SERVER`, `MT5_BROKER_PORT`
 - **Comprehensive Log Monitoring**: Streams EA, System, Trading, Tester, and Indicator logs to container stdout
-- **MQL5 Volume**: `./mql5` bind mount → `/config/.wine/drive_c/.../MQL5/Experts` (your EAs on exFAT)
-- **MT5 Wine Prefix**: `mt5-vantage` named volume → `/config/.wine` (persists MT5 install across rebuilds)
+- **MQL5 Volume**: `./mql5` bind mount → `/opt/mt5/drive_c/.../MQL5/Experts` (your EAs on exFAT)
+- **MT5 Wine Prefix**: `mt5-vantage` named volume → `/opt/mt5` (persists MT5 install across rebuilds)
 - **VNC Config**: `vantage-config` named volume → `/config` (persists VNC/openbox settings across rebuilds)
 
 ## Configuration
@@ -34,16 +34,16 @@ MetaTrader 5 Docker container with support for both development (VNC) and produc
 | `MT5_VNC_USER` | VNC username | Set in `.env` |
 | `MT5_VNC_PASSWORD` | VNC password | Set in `.env` |
 | `VNC_RESOLUTION` | VNC screen resolution | `1280x800` |
-| `WINEPREFIX` | Wine prefix path | `/config/.wine` |
+| `WINEPREFIX` | Wine prefix path | `/opt/mt5` |
 | `WINEARCH` | Wine architecture | `win64` |
 
 ### Volume Mounts
 
 | Host Path | Container Path | Purpose |
 |-----------|---------------|---------|
-| `mt5-vantage` | `/config/.wine` | MT5 Wine prefix (persists install across rebuilds) |
-| `./mql5` | `/config/.wine/drive_c/Program Files/MetaTrader 5/MQL5/Experts` | Expert Advisors |
-| `./logs` (optional) | `/config/.wine/drive_c/users/container/AppData/Roaming/MetaQuotes/Terminal` | MT5 log persistence |
+| `mt5-vantage` | `/opt/mt5` | MT5 Wine prefix (persists install across rebuilds) |
+| `./mql5` | `/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/Experts` | Expert Advisors |
+| `./logs` (optional) | `/opt/mt5/drive_c/users/container/AppData/Roaming/MetaQuotes/Terminal` | MT5 log persistence |
 
 ### Ports
 
@@ -162,7 +162,7 @@ podman logs mt5-test | grep -E "auto-login|/login|/password|/server"
 podman run --rm --network host python:3.11 bash -c 'pip install rpyc -q && python3 -c "import rpyc; conn = rpyc.connect(\"127.0.0.1\", 8002); print(\"Connected\"); conn.close()"'
 
 # Verify MT5 binary
-podman exec mt5-test ls -la "/config/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe"
+podman exec mt5-test ls -la "/opt/mt5/drive_c/Program Files/MetaTrader 5/terminal64.exe"
 
 podman rm -f mt5-test
 ```
@@ -210,7 +210,7 @@ podman port mt5_app
 
 ### Permission Denied on Downloads
 
-If you see `curl: (23) Failure writing output to destination`, the host filesystem (exFAT) doesn't support Wine prefix operations. Ensure the Wine prefix stays inside the container on overlayfs (do not mount `/config/.wine` as a host volume).
+If you see `curl: (23) Failure writing output to destination`, the host filesystem (exFAT) doesn't support Wine prefix operations. Ensure the Wine prefix stays inside the container on overlayfs (do not mount `/opt/mt5` as a host volume).
 
 ### VNC Shows 401 Unauthorized
 
@@ -231,7 +231,7 @@ podman compose down && podman compose up -d
 ### MT5 Installer Fails
 
 ```bash
-podman exec mt5_app rm -rf /config/.wine
+podman exec mt5_app rm -rf /opt/mt5
 podman restart mt5_app
 ```
 
@@ -244,7 +244,7 @@ A placeholder `Terminal.ico` is created if missing from the MT5 installation dir
 If the error persists, verify the icon file exists:
 
 ```bash
-podman exec mt5_app ls /config/.wine/drive_c/Program\ Files/MetaTrader\ 5/Terminal.ico
+podman exec mt5_app ls /opt/mt5/drive_c/Program\ Files/MetaTrader\ 5/Terminal.ico
 ```
 
 ## Security Notes

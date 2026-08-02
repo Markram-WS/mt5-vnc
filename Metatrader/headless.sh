@@ -23,10 +23,8 @@ fi
 echo "[headless] Xvfb started successfully"
 
 export DISPLAY=:99
-export WINEPREFIX="${WINEPREFIX:-/config/.wine}"
-export XDG_DATA_HOME=/config/.local/share
-
-echo "[headless] Running start.sh..."
+export WINEPREFIX="${WINEPREFIX:-/opt/mt5}"
+export XDG_DATA_HOME=/opt/mt5/.local/share
 bash /Metatrader/start.sh
 
 echo "[headless] Entering wait state..."
