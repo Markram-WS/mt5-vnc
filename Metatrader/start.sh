@@ -86,7 +86,8 @@ if [ ! -e "${WINEPREFIX}/drive_c/windows/mono" ]; then
     show_message "[start.sh] [1/7] Downloading and installing Mono..."
     curl -L -o "${WINEPREFIX}/drive_c/mono.msi" "$mono_url"
     if [ -f "${WINEPREFIX}/drive_c/mono.msi" ]; then
-        $wine_executable msiexec /i "${WINEPREFIX}/drive_c/mono.msi" /qn
+        # Use xvfb-run to provide virtual display for Mono installer (needed in Kubernetes/headless)
+        xvfb-run -a $wine_executable msiexec /i "${WINEPREFIX}/drive_c/mono.msi" /qn
         rm -f "${WINEPREFIX}/drive_c/mono.msi"
         show_message "[start.sh] [1/7] Mono installed."
     else
