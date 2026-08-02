@@ -34,6 +34,13 @@ RUN wineboot -u 2>/dev/null || true && \
 # Make Wine prefix writable by abc user (container runs non-root for VNC)
 RUN chmod -R 777 /opt/mt5
 
+# Install Wine Mono during build (avoids runtime installer dialog)
+RUN curl -L -o /opt/mt5/mono.msi "https://dl.winehq.org/wine/wine-mono/10.3.0/wine-mono-10.3.0-x86.msi" 2>/dev/null && \
+    WINEDEBUG=-all wine msiexec /i /opt/mt5/mono.msi /qn 2>/dev/null && \
+    rm -f /opt/mt5/mono.msi && \
+    echo "[Dockerfile] Wine Mono installed." || \
+    echo "[Dockerfile] Wine Mono install skipped."
+
 # Disable duplicate autostart (init-mt5 service already handles MT5 launch)
 RUN printf '' > /defaults/autostart
 
