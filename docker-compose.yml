@@ -38,13 +38,17 @@ services:
       # System Configuration
       LSIO_NON_ROOT_USER: "true"
 
+    # Guaranteed MT5 LiveUpdate block (compose injects these into /etc/hosts)
+    extra_hosts:
+      - "update.mql5.com:127.0.0.1"
+
     volumes:
       # Persistent config data
-      - vantage-mt5:/opt/mt5-prefix/drive_c/Program Files/MetaTrader 5/
+      - mt5-vantage:/app/drive_c/Program Files/MetaTrader 5/
       # Mount EA/mt5Scripts into MT5 (Wine prefix is on overlayfs, not exFAT)
-      - ./mql5:/opt/mt5-prefix/drive_c/Program Files/MetaTrader 5/MQL5/
-      # Optional: Mount MT5 logs to host for persistence
-      # - ./logs:/opt/mt5-prefix/drive_c/users/container/AppData/Roaming/MetaQuotes/Terminal
+      - ./mql5:/app/drive_c/Program Files/MetaTrader 5/MQL5/
+      # Persistent MT5 session data (accounts, logs, files)
+      - mt5-vantage-session:/app/drive_c/users/container/AppData/Roaming/MetaQuotes/Terminal
 
     shm_size: '256m'
     deploy:
@@ -53,4 +57,5 @@ services:
           memory: 1024M
 
 volumes:
-   vantage-mt5:
+   mt5-vantage:
+   mt5-vantage-session:

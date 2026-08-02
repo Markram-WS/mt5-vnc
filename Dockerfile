@@ -19,7 +19,7 @@ RUN sed -i 's|http://127.0.0.1:6900;|http://127.0.0.1:6901;|g' /defaults/default
 RUN sed -i '/^# Run MT5 install/d' /defaults/startwm.sh
 
 # Pre-initialize Wine prefix in image layer (NOT on exFAT host mount)
-ENV WINEPREFIX=/opt/mt5-prefix
+ENV WINEPREFIX=/app
 ENV WINEARCH=win64
 
 # Initialize Wine prefix during build (overlayfs supports symlinks/permissions)
@@ -30,7 +30,7 @@ RUN wineboot -u 2>/dev/null || true && \
     done
 
 # Make Wine prefix writable by abc user (container runs non-root for VNC)
-RUN chmod -R 777 /opt/mt5-prefix
+RUN chmod -R 777 /app
 
 # Disable duplicate autostart (init-mt5 service already handles MT5 launch)
 RUN printf '' > /defaults/autostart

@@ -23,7 +23,7 @@ fi
 echo "[headless] Xvfb started successfully"
 
 export DISPLAY=:99
-export WINEPREFIX="${WINEPREFIX:-/opt/mt5-prefix}"
+export WINEPREFIX="${WINEPREFIX:-/app}"
 export WINEDLLOVERRIDES="winemenubuilder.exe=d"
 export XDG_RUNTIME_DIR=/tmp
 export XDG_DATA_HOME=/config/.local/share
