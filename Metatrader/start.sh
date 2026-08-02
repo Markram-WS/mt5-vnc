@@ -81,6 +81,9 @@ if [ ! -f "${WINEPREFIX}/system.reg" ]; then
     echo "[start.sh] Wine prefix initialized"
 fi
 
+# Disable Wine internal updater completely (prevents Mono installer dialog)
+$wine_executable reg add "HKEY_CURRENT_USER\\Software\\Wine\\Wine Updater" /v "Enabled" /t REG_SZ /d "no" /f 2>/dev/null || true
+
 # Install Mono if not present (auto-silent, no UI in any environment)
 if [ ! -e "${WINEPREFIX}/drive_c/windows/mono" ]; then
     show_message "[start.sh] [1/7] Installing Mono silently..."
