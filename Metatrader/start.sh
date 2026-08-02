@@ -81,15 +81,20 @@ if [ ! -f "${WINEPREFIX}/system.reg" ]; then
     echo "[start.sh] Wine prefix initialized"
 fi
 
-# Install Mono if not present (must complete before MT5 starts)
+# Install Mono if not present (auto-silent, no UI in any environment)
 if [ ! -e "${WINEPREFIX}/drive_c/windows/mono" ]; then
-    show_message "[start.sh] [1/7] Downloading and installing Mono..."
-    curl -L -o "${WINEPREFIX}/drive_c/mono.msi" "$mono_url"
+    show_message "[start.sh] [1/7] Installing Mono silently..."
+    curl -L -o "${WINEPREFIX}/drive_c/mono.msi" "$mono_url" 2>&1
     if [ -f "${WINEPREFIX}/drive_c/mono.msi" ]; then
-        # Use xvfb-run to provide virtual display for Mono installer (needed in Kubernetes/headless)
-        xvfb-run -a $wine_executable msiexec /i "${WINEPREFIX}/drive_c/mono.msi" /qn
+        # xvfb-run provides virtual display; /qn = silent install, no UI
+        export DISPLAY="${DISPLAY:-:99}"
+        xvfb-run -a $wine_executable msiexec /i "${WINEPREFIX}/drive_c/mono.msi" /qn 2>&1
         rm -f "${WINEPREFIX}/drive_c/mono.msi"
-        show_message "[start.sh] [1/7] Mono installed."
+        if [ -e "${WINEPREFIX}/drive_c/windows/mono" ]; then
+            show_message "[start.sh] [1/7] Mono installed successfully."
+        else
+            show_message "[start.sh] [1/7] Mono install completed (check if needed)."
+        fi
     else
         show_message "[start.sh] [1/7] Mono download failed, skipping."
     fi
