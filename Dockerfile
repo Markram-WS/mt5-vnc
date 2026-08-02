@@ -29,9 +29,6 @@ RUN wineboot -u 2>/dev/null || true && \
       sleep 1; \
     done
 
-# Make Wine prefix writable by abc user (container runs non-root for VNC)
-RUN chmod -R 777 /config/.wine
-
 # Disable duplicate autostart (init-mt5 service already handles MT5 launch)
 RUN printf '' > /defaults/autostart
 
