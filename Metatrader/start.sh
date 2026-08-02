@@ -81,9 +81,10 @@ if [ ! -f "${WINEPREFIX}/system.reg" ]; then
     echo "[start.sh] Wine prefix initialized"
 fi
 
-# Install Mono if not present
+# Install Mono if not present (run in background so MT5 can start while Mono installs)
 if [ ! -e "${WINEPREFIX}/drive_c/windows/mono" ]; then
-    show_message "[start.sh] [1/7] Downloading and installing Mono..."
+    (
+    show_message "[start.sh] [1/7] Downloading and installing Mono in background..."
     curl -L -o "${WINEPREFIX}/drive_c/mono.msi" "$mono_url" 2>&1
     if [ -f "${WINEPREFIX}/drive_c/mono.msi" ]; then
         $wine_executable msiexec /i "${WINEPREFIX}/drive_c/mono.msi" /qn
@@ -92,6 +93,7 @@ if [ ! -e "${WINEPREFIX}/drive_c/windows/mono" ]; then
     else
         show_message "[start.sh] [1/7] Mono download failed, skipping."
     fi
+    ) &
 else
     show_message "[start.sh] [1/7] Mono is already installed."
 fi
