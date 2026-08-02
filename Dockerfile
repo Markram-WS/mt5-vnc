@@ -22,6 +22,8 @@ RUN sed -i '/^# Run MT5 install/d' /defaults/startwm.sh
 ENV WINEPREFIX=/config/.wine
 ENV WINEARCH=win64
 
+# Create /config/.wine directory before wineboot (volume doesn't exist during build)
+RUN mkdir -p /config/.wine
 # Initialize Wine prefix during build (overlayfs supports symlinks/permissions)
 RUN wineboot -u 2>/dev/null || true && \
     for i in $(seq 30); do \
