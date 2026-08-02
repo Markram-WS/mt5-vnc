@@ -289,6 +289,18 @@ podman exec mt5_app rm -rf /app
 podman restart mt5_app
 ```
 
+### ObRender: Cannot load Terminal.ico
+
+MT5 may log `ObRender-Message: Cannot load image ".../Terminal.ico"` on startup. This is a non-fatal Wine rendering warning — the icon file is missing from the MT5 installation directory. The fix is applied automatically in `start.sh`:
+
+A placeholder `Terminal.ico` is created if missing from the MT5 installation directory.
+
+If the error persists, verify the icon file exists:
+
+```bash
+podman exec mt5_app ls /app/drive_c/Program\ Files/MetaTrader\ 5/Terminal.ico
+```
+
 ## Security Notes
 
 - VNC credentials are stored in `.env` file — keep this file secure

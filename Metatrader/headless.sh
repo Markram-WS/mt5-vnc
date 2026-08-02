@@ -26,7 +26,7 @@ export DISPLAY=:99
 export WINEPREFIX="${WINEPREFIX:-/app}"
 export WINEDLLOVERRIDES="winemenubuilder.exe=d"
 export XDG_RUNTIME_DIR=/tmp
-export XDG_DATA_HOME=/config/.local/share
+export XDG_DATA_HOME=/app/.local/share
 
 echo "[headless] Running start.sh..."
 bash /Metatrader/start.sh
