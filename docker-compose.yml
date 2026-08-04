@@ -46,12 +46,9 @@ services:
 
     volumes:
       # Persistent mt5
-      - mt5-vantage:/opt/mt5/drive_c/Program Files/MetaTrader 5/
+      - mt5-vantage:/opt/mt5/
       # Mount EA/mt5Scripts into MT5 (Wine prefix is on overlayfs, not exFAT)
       - ./mql5:/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/
-      # Persistent MT5 session data (accounts, logs, files)
-      - mt5-vantage-session:/opt/mt5/drive_c/users/root/AppData/Roaming/MetaQuotes/Terminal
-
     shm_size: '256m'
     deploy:
       resources:
