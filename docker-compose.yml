@@ -41,7 +41,8 @@ services:
 
     # Guaranteed MT5 LiveUpdate block (compose injects these into /etc/hosts)
     extra_hosts:
-      - "update.mql5.com:[IP_ADDRESS]"
+      - "update.mql5.com:127.0.0.1"
+      - "updates.mql5.com:127.0.0.1"
 
     volumes:
       # Persistent mt5
@@ -49,7 +50,7 @@ services:
       # Mount EA/mt5Scripts into MT5 (Wine prefix is on overlayfs, not exFAT)
       - ./mql5:/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/
       # Persistent MT5 session data (accounts, logs, files)
-      - mt5-vantage-session:/opt/mt5/drive_c/users/container/AppData/Roaming/MetaQuotes/Terminal
+      - mt5-vantage-session:/opt/mt5/drive_c/users/root/AppData/Roaming/MetaQuotes/Terminal
 
     shm_size: '256m'
     deploy:

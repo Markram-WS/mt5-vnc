@@ -47,22 +47,16 @@ RUN WINEDEBUG=-all wine reg add "HKEY_CURRENT_USER\\Software\\Wine\\Wine Updater
 # Disable duplicate autostart (init-mt5 service already handles MT5 launch)
 RUN printf '' > /defaults/autostart
 
-# Environment variable defaults for custom scripts
-ENV COMPANY_ENV="production"
-ENV MT5_BROKER_SERVER=""
-ENV MT5_BROKER_PORT="443"
-ENV COMPANY_REGION="us-east-1"
-ENV ENABLE_MT5LINUX_API="true"
 ENV HEADLESS="false"
 
 # Copy custom scripts (replaces base image start.sh sed modifications)
 COPY Metatrader/start.sh /Metatrader/start.sh
 COPY Metatrader/headless.sh /Metatrader/headless.sh
-# Create s6 init-mt5 service: wait for display, run start.sh as abc (user owning
-# /opt/mt5 prefix + X display). Output goes to a log file (s6 oneshot closes stdout
-# once the run script exits, which previously hid start.sh logs).
+# Create s6 init-mt5 service: longrun that waits for the display, then runs
+# start.sh in the foreground as root. All output flows to stdout so `podman logs`
+# shows every log. Longrun also auto-restarts the setup if MT5 exits.
 RUN mkdir -p /etc/s6-overlay/s6-rc.d/init-mt5/dependencies.d && \
-    printf '#!/usr/bin/with-contenv bash\nset -e\n\
+    printf '#!/usr/bin/with-contenv bash\n\
 export DISPLAY=:1\n\
 \n\
 for i in $(seq 30); do\n\
@@ -73,14 +67,13 @@ for i in $(seq 30); do\n\
 done\n\
 \n\
 if [ -f /Metatrader/start.sh ]; then\n\
-  echo "[init-mt5] Starting MT5 setup (log: /tmp/mt5-startup.log)..."\n\
-  touch /tmp/mt5-startup.log && chown abc:abc /tmp/mt5-startup.log\n\
-  s6-setuidgid abc /Metatrader/start.sh > /tmp/mt5-startup.log 2>&1 &\n\
-  echo "[init-mt5] MT5 setup backgrounded."\n\
-fi\n' > /etc/s6-overlay/s6-rc.d/init-mt5/run && \
+  echo "[init-mt5] Starting MT5 setup (logs on stdout)..."\n\
+  exec /Metatrader/start.sh\n\
+fi\n\
+\n\
+exec sleep infinity\n' > /etc/s6-overlay/s6-rc.d/init-mt5/run && \
     chmod +x /etc/s6-overlay/s6-rc.d/init-mt5/run && \
-    echo "oneshot" > /etc/s6-overlay/s6-rc.d/init-mt5/type && \
-    echo "/etc/s6-overlay/s6-rc.d/init-mt5/run" > /etc/s6-overlay/s6-rc.d/init-mt5/up && \
+    echo "longrun" > /etc/s6-overlay/s6-rc.d/init-mt5/type && \
     echo "init-envfile" > /etc/s6-overlay/s6-rc.d/init-mt5/dependencies.d/init-envfile && \
     echo "init-mt5" >> /etc/s6-overlay/s6-rc.d/user/contents.d/init-mt5
 

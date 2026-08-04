@@ -12,9 +12,11 @@ MetaTrader 5 Docker container with support for both development (VNC) and produc
 - **MT5 Auto-Login**: CLI credentials + xdotool GUI auto-login fallback (MT5 build 3000+ dropped CLI auth support)
 - **Company Environment**: `COMPANY_ENV`, `COMPANY_REGION`, `MT5_BROKER_SERVER`, `MT5_BROKER_PORT`
 - **Comprehensive Log Monitoring**: Streams EA, System, Trading, Tester, and Indicator logs to container stdout
-- **MQL5 Volume**: `./mql5` bind mount → `/opt/mt5/drive_c/.../MQL5/Experts` (your EAs on exFAT)
-- **MT5 Wine Prefix**: `mt5-vantage` named volume → `/opt/mt5` (persists MT5 install across rebuilds)
-- **VNC Config**: `vantage-config` named volume → `/config` (persists VNC/openbox settings across rebuilds)
+- **All Logs on STDOUT**: `init-mt5` runs as an s6 longrun service and execs `start.sh` in the foreground — every log (install, launch, mt5linux, monitor) appears in `podman logs -f mt5_app`
+- **MQL5 Volume**: `./mql5` bind mount → `/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/` (EAs, indicators, scripts)
+- **MT5 Install Volume**: `mt5-vantage` named volume → `/opt/mt5/drive_c/Program Files/MetaTrader 5/` (persists MT5 install across rebuilds)
+- **MT5 Session Volume**: `mt5-vantage-session` named volume → `/opt/mt5/drive_c/users/root/AppData/Roaming/MetaQuotes/Terminal` (persists session data, accounts, logs)
+- **MT5 LiveUpdate Blocked**: `update.mql5.com` / `updates.mql5.com` → `127.0.0.1` via compose `extra_hosts` + a `start.sh` fallback
 
 ## Configuration
 
@@ -41,9 +43,9 @@ MetaTrader 5 Docker container with support for both development (VNC) and produc
 
 | Host Path | Container Path | Purpose |
 |-----------|---------------|---------|
-| `mt5-vantage` | `/opt/mt5` | MT5 Wine prefix (persists install across rebuilds) |
-| `./mql5` | `/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/Experts` | Expert Advisors |
-| `./logs` (optional) | `/opt/mt5/drive_c/users/container/AppData/Roaming/MetaQuotes/Terminal` | MT5 log persistence |
+| `mt5-vantage` | `/opt/mt5/drive_c/Program Files/MetaTrader 5/` | MT5 install (persists across rebuilds) |
+| `./mql5` | `/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/` | Expert Advisors, indicators, scripts |
+| `mt5-vantage-session` | `/opt/mt5/drive_c/users/root/AppData/Roaming/MetaQuotes/Terminal` | MT5 session data (accounts, logs, files) |
 
 ### Ports
 
@@ -70,6 +72,15 @@ The container uses custom scripts that replace the base image's start.sh:
 | `/Metatrader/entrypoint.sh` | HEADLESS toggle wrapper |
 | `/Metatrader/resize-windows.sh` | VNC window auto-sizing |
 
+### Startup Service (`init-mt5`)
+
+MT5 is launched by a custom s6 service (`/etc/s6-overlay/s6-rc.d/init-mt5`) that:
+
+- Is a **longrun** service (auto-restarts the setup if MT5 exits)
+- Waits for the KasmVNC display socket (`/tmp/.X11-unix/X1`) before launching
+- Runs `/Metatrader/start.sh` **as root** in the foreground with no log-file redirect, so all output streams to container STDOUT (`podman logs -f mt5_app`)
+- Does not write `/tmp/mt5-startup.log` (removed — that file redirect previously failed under rootless Podman user namespaces and silently stopped MT5 from ever launching)
+
 ### Log Monitoring
 
 `monitor-mt5-logs.sh` streams all MT5 log files to container stdout with type prefixes:
@@ -86,27 +97,34 @@ The container uses custom scripts that replace the base image's start.sh:
 
 MT5 build 3000+ dropped support for command-line `/login:`/`/password:`/`/server:` parameters. The container uses a two-layer approach:
 
-1. **CLI parameters** — Attempts `/login:ACCOUNT /password:PASS /server:SERVER /portable` first (may work on older builds)
-2. **xdotool GUI auto-login** — If CLI params fail or MT5 shows a login dialog, `start.sh` uses `xdotool` to type credentials into the login window via X11 automation. Works with both KasmVNC (`:1`) and Xvfb (`:99`) displays, with a 60-second retry loop.
+1. **CLI parameters** — MT5 is launched with `/login:ACCOUNT /password:PASS /server:SERVER /portable` in the background (works on some builds)
+2. **xdotool GUI auto-login** — While MT5 is running, `start.sh` uses `xdotool` to type credentials into the login window via X11 automation. Works with both KasmVNC (`:1`) and Xvfb (`:99`) displays, with a 60-second retry loop.
 
 Both are attempted automatically. MT5 always starts — if auto-login fails, log in manually via VNC.
+
+> **Note:** MT5 must be launched in the **background** (`&`) before the xdotool login step. A foreground `wine` call blocks `start.sh` until the terminal exits, which prevented the GUI auto-login from ever running.
 ### Server Address Resolution
 
 If `MT5_SERVER` is not set but `MT5_BROKER_SERVER` + `MT5_BROKER_PORT` are, the address is constructed as `server:port`.
 ### Auto-Login Flow (start.sh)
 
 ```
-[7/7] Starting MT5 with auto-login credentials...
-       ├─ CLI attempt (/login: /password: /server:)
-       │    ├─ Success → MT5 running with credentials
-       │    └─ Failure → MT5 launched in /portable mode
-       └─ xdotool GUI auto-login (60s retry loop)
-            ├─ Login window found → type credentials via X11
-            └─ No window found → skip (CLI auth succeeded)
+[7/7] Launching MT5 (background, CLI /login: /password: /server:)
+        └─ xdotool GUI auto-login (60s retry loop, runs while MT5 is up)
+             ├─ Login window found → type credentials via X11
+             └─ No window found → skip (CLI auth succeeded)
 ```
 ### Wine pip Timeouts
 
 Some Wine Python packages (mt5linux, rpyc) hang during pip download due to Wine networking issues. These packages are skipped in Wine — mt5linux runs on the Linux side and does not require them.
+
+### MT5 Runs as Root
+
+MT5 (wine) runs as the container's root user instead of the non-root `abc` user. This is intentional and required for **rootless Podman**:
+
+- Container root maps to the host user (e.g. `wasan`, uid 1000), which is the owner of the bind-mounted `./mql5` — so MT5 can write/compile EAs. The `abc` user (uid 911) maps to a subuid and *cannot* write to the host bind mount.
+- The Wine prefix is built as root during image build (registry points to `C:\users\root`), so wine-as-root matches ownership exactly — no `chown` gymnastics, no user-namespace permission traps.
+- KasmVNC runs with `-SecurityTypes None` and `/tmp/.X11-unix` is world-writable, so the root MT5 window renders normally in the browser.
 
 ### Duplicate start.sh Processes
 
@@ -121,8 +139,8 @@ podman compose down && podman compose up -d
 ### Build Verification
 
 ```bash
-cd /media/wasan/Storage/mt5
-podman build -t mt5-mt5-node .
+cd /media/wasan/Storage/mt5-dev
+podman compose build
 ```
 
 ### Dev Mode Verification
@@ -191,8 +209,8 @@ podman rm -f mt5-no-api
 MT5 installation takes 2-3 minutes on first start. Look for these log markers:
 
 ```
-[headless] Starting Xvfb...
-[headless] Xvfb started successfully
+[init-mt5] Starting MT5 setup (logs on stdout)...
+[start.sh] === MT5 Startup ===
 [start.sh] [3/7] Installing MetaTrader 5...
 [start.sh] [6/7] The mt5linux server is running on port 8001.
 [start.sh] [7/7] Starting MT5 with auto-login credentials...
@@ -252,7 +270,7 @@ podman exec mt5_app ls /opt/mt5/drive_c/Program\ Files/MetaTrader\ 5/Terminal.ic
 - VNC credentials are stored in `.env` file — keep this file secure
 - mt5linux API has no built-in authentication — use network security (firewall for production)
 - MT5 account credentials passed as command-line args — secure `.env` accordingly
-- Wine prefix is world-writable (777) inside the container — this is necessary because the container runs as a non-root user for VNC
+- MT5 runs as root inside the container (see "MT5 Runs as Root" above) — a development convenience for rootless Podman, not a hardened production posture
 
 ## Container Files
 
@@ -294,13 +312,15 @@ Based on `gmag11/metatrader5_vnc:latest` which includes:
 ### Key Fixes Applied
 
 1. **Wine Prefix**: Pre-initialized on overlayfs during build (not on host exFAT mount)
-2. **Wine Prefix Permissions**: World-writable (777) for non-root VNC user
-3. **Duplicate Autostart**: Disabled in Dockerfile + stale file removal on host volume
-4. **mt5linux API**: Removed `-w` flag incompatible with mt5linux v1.0.3+
-5. **API Toggle**: `ENABLE_MT5LINUX_API` controls mt5linux launch
-6. **MT5 Credentials**: CLI auth + xdotool GUI auto-login fallback (MT5 build 3000+ dropped CLI support)
-7. **Log Monitoring**: Comprehensive script covering all MT5 log types
-8. **Wine pip Timeouts**: Skipped mt5linux/rpyc in Wine (hang on download) — mt5linux runs on Linux side
+2. **MT5 Runs as Root**: Fixed `wine: '<prefix>' is not owned by you` under rootless Podman (see "MT5 Runs as Root")
+3. **`init-mt5` Longrun Service**: Runs `start.sh` in the foreground as root; all logs stream to STDOUT (`podman logs`) instead of a `/tmp/mt5-startup.log` file redirect that failed under rootless Podman user namespaces
+4. **Duplicate Autostart**: Disabled in Dockerfile + stale file removal on host volume
+5. **mt5linux API**: Removed `-w` flag incompatible with mt5linux v1.0.3+
+6. **API Toggle**: `ENABLE_MT5LINUX_API` controls mt5linux launch
+7. **MT5 Credentials**: MT5 launched in background, then xdotool GUI auto-login (a foreground `wine` call blocked the login step)
+8. **Log Monitoring**: Comprehensive script covering all MT5 log types (watches `users/root/.../MetaQuotes/Terminal`)
+9. **Wine pip Timeouts**: Skipped mt5linux/rpyc in Wine (hang on download) — mt5linux runs on Linux side
+10. **MT5 LiveUpdate Blocked**: `update.mql5.com` / `updates.mql5.com` → `127.0.0.1` in `extra_hosts` + `start.sh` fallback
 ## Performance Considerations
 
 - **First Start**: 2-3 minutes for MT5 installation
