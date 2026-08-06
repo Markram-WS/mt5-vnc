@@ -31,7 +31,10 @@ services:
 
       # API Configuration
       ENABLE_MT5LINUX_API: ${ENABLE_MT5LINUX_API:-true}
-
+      # Auto-start EA configuration
+      MT5_AUTO_START_EA: ${MT5_AUTO_START_EA:-TestAutoStartEA}
+      MT5_AUTO_START_SYMBOL: ${MT5_AUTO_START_SYMBOL:-EURUSD}
+      MT5_AUTO_START_PERIOD: ${MT5_AUTO_START_PERIOD:-H1}
       # Mode Selection
       HEADLESS: ${HEADLESS:-false}
       WINEPREFIX: /opt/mt5
@@ -49,6 +52,9 @@ services:
       - mt5-vantage:/opt/mt5/
       # Mount EA/mt5Scripts into MT5 (Wine prefix is on overlayfs, not exFAT)
       - ./mql5:/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/
+      # Host-controlled startup.ini (MT5 reads + one-shot-consumes this in
+      # portable mode; start.sh rewrites it before every launch)
+      - ./Metatrader/startup.ini:/opt/mt5/drive_c/Program Files/MetaTrader 5/startup.ini
     shm_size: '256m'
     deploy:
       resources:

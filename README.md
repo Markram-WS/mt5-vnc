@@ -12,13 +12,15 @@ MetaTrader 5 Docker container with support for both development (VNC) and produc
 - **MT5 Auto-Login**: CLI credentials + xdotool GUI auto-login fallback (MT5 build 3000+ dropped CLI auth support)
 - **Company Environment**: `COMPANY_ENV`, `COMPANY_REGION`, `MT5_BROKER_SERVER`, `MT5_BROKER_PORT`
 - **Comprehensive Log Monitoring**: Streams EA, System, Trading, Tester, and Indicator logs to container stdout
+- **EA Auto-Start (working)**: `startup.ini` (`Expert`/`Symbol`/`Period`) is written by `start.sh` before every MT5 launch into both the AppData terminal dir and the portable-mode install root, then bind-mounted from the host. MT5 build 6090 reads it and attaches the EA to a chart on boot — verified across restarts/rebuilds (see TROUBLESHOOT §3). Setup guide: [docs/INSTALL.md](docs/INSTALL.md)
 - **All Logs on STDOUT**: `init-mt5` runs as an s6 longrun service and execs `start.sh` in the foreground — every log (install, launch, mt5linux, monitor) appears in `podman logs -f mt5_app`
 - **MQL5 Volume**: `./mql5` bind mount → `/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/` (EAs, indicators, scripts)
-- **MT5 Install Volume**: `mt5-vantage` named volume → `/opt/mt5/drive_c/Program Files/MetaTrader 5/` (persists MT5 install across rebuilds)
-- **MT5 Session Volume**: `mt5-vantage-session` named volume → `/opt/mt5/drive_c/users/root/AppData/Roaming/MetaQuotes/Terminal` (persists session data, accounts, logs)
+- **Wine Prefix Volume**: `mt5-vantage` named volume → `/opt/mt5/` (persists the entire Wine prefix — MT5 install, profile, session — across rebuilds)
 - **MT5 LiveUpdate Blocked**: `update.mql5.com` / `updates.mql5.com` → `127.0.0.1` via compose `extra_hosts` + a `start.sh` fallback
 
 ## Configuration
+
+> **คู่มือติดตั้งฉบับเต็ม (ภาษาไทย): [docs/INSTALL.md](docs/INSTALL.md)** — ครอบคลุมการตั้งค่า `.env`, การวาง EA, การรัน/restart, การตรวจสอบ log, VNC, และ API.
 
 ### Environment Variables
 
@@ -36,6 +38,9 @@ MetaTrader 5 Docker container with support for both development (VNC) and produc
 | `MT5_VNC_USER` | VNC username | Set in `.env` |
 | `MT5_VNC_PASSWORD` | VNC password | Set in `.env` |
 | `VNC_RESOLUTION` | VNC screen resolution | `1280x800` |
+| `MT5_AUTO_START_EA` | EA auto-attached to a chart on launch | `TestAutoStartEA` |
+| `MT5_AUTO_START_SYMBOL` | Symbol for the auto-attached chart | `EURUSD` |
+| `MT5_AUTO_START_PERIOD` | Timeframe for the auto-attached chart (`M1`, `H1`, `D1`, …) | `H1` |
 | `WINEPREFIX` | Wine prefix path | `/opt/mt5` |
 | `WINEARCH` | Wine architecture | `win64` |
 
@@ -43,9 +48,11 @@ MetaTrader 5 Docker container with support for both development (VNC) and produc
 
 | Host Path | Container Path | Purpose |
 |-----------|---------------|---------|
-| `mt5-vantage` | `/opt/mt5/drive_c/Program Files/MetaTrader 5/` | MT5 install (persists across rebuilds) |
-| `./mql5` | `/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/` | Expert Advisors, indicators, scripts |
-| `mt5-vantage-session` | `/opt/mt5/drive_c/users/root/AppData/Roaming/MetaQuotes/Terminal` | MT5 session data (accounts, logs, files) |
+| `mt5-vantage` (compose: `mt5-dev_mt5-vantage`) | `/opt/mt5/` | Entire Wine prefix — MT5 install, profile, session, logs persist across rebuilds |
+| `./mql5` (bind mount) | `/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/` | Expert Advisors, indicators, scripts (portable-mode EA logs) |
+| `./Metatrader/startup.ini` (bind mount) | `/opt/mt5/drive_c/Program Files/MetaTrader 5/startup.ini` | Host-controlled EA auto-start config; MT5 consumes it once at startup, `start.sh` rewrites it before every launch |
+
+> `mt5-vantage-session` is declared in `docker-compose.yml` but not currently mounted; session data persists inside the `mt5-vantage` prefix volume.
 
 ### Ports
 
@@ -93,6 +100,21 @@ MT5 is launched by a custom s6 service (`/etc/s6-overlay/s6-rc.d/init-mt5`) that
 | `[SYSTEM:filename.log]` | Terminal system logs |
 | `[TESTER:filename.log]` | Strategy tester logs |
 
+MT5 runs in **portable mode**, so EA logs are written to the install dir
+`/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/logs` (host `mql5/logs/`) rather than
+`AppData/Roaming/MetaQuotes/Terminal`. The monitor watches both locations.
+
+Two encoding pitfalls are handled by the monitor:
+
+- MT5 log files are **UTF-16LE**. `tail -F` splits lines on byte `0x0A`, but the UTF-16
+  newline is `0A 00`, so the stream ends up misaligned by one byte. The monitor strips NUL
+  bytes (`stdbuf -oL tr -d '\000'`) instead of using `iconv`, which would mangle every line.
+- `stdbuf -oL` forces line buffering; without it `tr` block-buffers ~4 KB and delays EA ticks
+  by tens of seconds.
+
+The exFAT host mount does not preserve directory case (the dir appears as lowercase `logs`),
+so discovery uses case-insensitive `find -ipath` matching.
+
 ### MT5 Authentication Strategy
 
 MT5 build 3000+ dropped support for command-line `/login:`/`/password:`/`/server:` parameters. The container uses a two-layer approach:
@@ -109,11 +131,46 @@ If `MT5_SERVER` is not set but `MT5_BROKER_SERVER` + `MT5_BROKER_PORT` are, the 
 ### Auto-Login Flow (start.sh)
 
 ```
-[7/7] Launching MT5 (background, CLI /login: /password: /server:)
-        └─ xdotool GUI auto-login (60s retry loop, runs while MT5 is up)
+[7/7] enable_auto_start_ea()
+        ├─ UUID dir exists?  YES → write startup.ini (Expert/Symbol/Period)
+        │                        to AppData <uuid>/ AND install root
+        └─ NO (fresh volume) → launch MT5 briefly → wait for UUID dir
+             → write startup.ini → relaunch MT5 once so it reads it
+        └─ [7/7] launch_mt5() guaranteed (existing volume fix: MT5 used to
+             never launch because launch_mt5 only ran inside the fresh-volume
+             branches of enable_auto_start_ea)
+        └─ xdotool GUI auto-login (60s retry loop)
              ├─ Login window found → type credentials via X11
              └─ No window found → skip (CLI auth succeeded)
 ```
+
+### EA Auto-Start
+
+`start.sh` writes `startup.ini` **before** MT5 reads it, into **two** locations:
+
+1. The AppData terminal instance directory
+   (`AppData/Roaming/MetaQuotes/Terminal/<uuid>/startup.ini`) — kept by MT5 but ignored
+2. The portable-mode **install root**
+   (`<prefix>/drive_c/Program Files/MetaTrader 5/startup.ini`) — MT5 reads (and consumes)
+   this at startup; it is also bind-mounted from `Metatrader/startup.ini` so the content is
+   host-controlled and re-created on every boot
+
+```ini
+[StartUp]
+Expert=TestAutoStartEA
+Symbol=EURUSD
+Period=H1
+```
+
+On a fresh volume (no UUID dir yet) MT5 is started briefly to create the profile, then
+relaunched once. Configure via `MT5_AUTO_START_EA`, `MT5_AUTO_START_SYMBOL`,
+`MT5_AUTO_START_PERIOD` (see Environment Variables).
+
+> **Known limitation:** despite the above, this MT5 build (6090) under Wine does **not**
+> reliably auto-attach the EA — the install-root `startup.ini` is consumed before account
+> authorization completes, and the attach fails silently. Verified across formats
+> (`[StartUp]`/`[Startup]`), both locations, and with the host bind-mount. Attach the EA
+> manually via VNC, or implement a post-login `xdotool` GUI attach. See TROUBLESHOOT §3.
 ### Wine pip Timeouts
 
 Some Wine Python packages (mt5linux, rpyc) hang during pip download due to Wine networking issues. These packages are skipped in Wine — mt5linux runs on the Linux side and does not require them.
@@ -204,6 +261,10 @@ podman rm -f mt5-no-api
 
 ## Troubleshooting
 
+> For detailed root-cause analysis of the most common issues — **EA logs not appearing
+> in `podman logs`**, **MT5 not launching on an existing volume**, and **the EA not
+> auto-attaching despite `startup.ini`** — see [`TROUBLESHOOT.md`](./TROUBLESHOOT.md).
+
 ### First Container Start Takes Longer
 
 MT5 installation takes 2-3 minutes on first start. Look for these log markers:
@@ -277,6 +338,7 @@ podman exec mt5_app ls /opt/mt5/drive_c/Program\ Files/MetaTrader\ 5/Terminal.ic
 ```
 /Metatrader/
 ├── start.sh               # Custom: install, API toggle, auto-login, log monitor
+├── startup.ini            # EA auto-start config (bind-mounted into MT5 install root)
 ├── headless.sh             # Custom: Xvfb headless mode
 ├── monitor-mt5-logs.sh     # Comprehensive MT5 log streaming
 ├── entrypoint.sh           # HEADLESS toggle wrapper
@@ -318,9 +380,11 @@ Based on `gmag11/metatrader5_vnc:latest` which includes:
 5. **mt5linux API**: Removed `-w` flag incompatible with mt5linux v1.0.3+
 6. **API Toggle**: `ENABLE_MT5LINUX_API` controls mt5linux launch
 7. **MT5 Credentials**: MT5 launched in background, then xdotool GUI auto-login (a foreground `wine` call blocked the login step)
-8. **Log Monitoring**: Comprehensive script covering all MT5 log types (watches `users/root/.../MetaQuotes/Terminal`)
+8. **Log Monitoring**: Comprehensive script covering all MT5 log types — watches both the portable install `MQL5/logs` and `AppData/.../MetaQuotes/Terminal`; decodes UTF-16LE by stripping NUL bytes with `stdbuf -oL tr -d '\000'` (a `tail -F` + `iconv` pipeline misaligned by one byte and block-buffered for seconds)
 9. **Wine pip Timeouts**: Skipped mt5linux/rpyc in Wine (hang on download) — mt5linux runs on Linux side
 10. **MT5 LiveUpdate Blocked**: `update.mql5.com` / `updates.mql5.com` → `127.0.0.1` in `extra_hosts` + `start.sh` fallback
+11. **EA Auto-Start (verified working)**: `startup.ini` written by `start.sh` before launch into both the AppData terminal dir and portable-mode install root (bind-mounted from the host); includes fresh-volume relaunch + a guaranteed `launch_mt5()` on existing volumes. MT5 build 6090 reads it and auto-attaches the EA on boot. Verified 2026-08-06: `expert TestAutoStartEA loaded successfully` on consecutive restarts + rebuilds with `OnTick` continuing in `MQL5/logs`. Cleanup: removed the dead Method 1 (`inject_common_ini`) and Method 2 (`build_cli_config`/`/config:`) code, so the boot-time `cannot load config "...autostart-cli.ini"` error no longer appears
+12. **Existing-volume launch fix**: `launch_mt5()` was previously only called inside the fresh-volume branches of `enable_auto_start_ea()` — MT5 never started on an existing volume (empty VNC). Now launched unconditionally after `enable_auto_start_ea()`
 ## Performance Considerations
 
 - **First Start**: 2-3 minutes for MT5 installation

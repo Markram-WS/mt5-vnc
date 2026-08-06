@@ -52,6 +52,7 @@ ENV HEADLESS="false"
 # Copy custom scripts (replaces base image start.sh sed modifications)
 COPY Metatrader/start.sh /Metatrader/start.sh
 COPY Metatrader/headless.sh /Metatrader/headless.sh
+COPY mql5/Metatrader/monitor-mt5-logs.sh /Metatrader/monitor-mt5-logs.sh
 # Create s6 init-mt5 service: longrun that waits for the display, then runs
 # start.sh in the foreground as root. All output flows to stdout so `podman logs`
 # shows every log. Longrun also auto-restarts the setup if MT5 exits.

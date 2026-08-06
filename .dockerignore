@@ -4,6 +4,8 @@
 *.md
 config/
 mql5/
+!mql5/Metatrader/
+!mql5/Metatrader/monitor-mt5-logs.sh
 Tests/
 *.md
 .vscode/
