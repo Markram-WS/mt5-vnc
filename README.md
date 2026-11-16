@@ -50,25 +50,49 @@ differ only in image, `HEADLESS` and resources; both mount the same MQL5 tree:
   committed files alone.
 * `deploy/components/prod-headless` — the shared prod deltas (`HEADLESS=true`,
   `tini` entrypoint, lean requests/limits), used by every prod overlay.
+* `deploy/components/fetch-profile` — the shared prod init container that seeds
+  the MT5 login profile from MinIO (bucket `mt5`, prefix `prod-demo`) on the
+  first start, then never touches it again.
 * `deploy/overlays/kind-dev` — image `localhost/mt5-dev:dev`, UI enabled,
-  NodePorts `30300`/`30801`, `secretGenerator` from its own `secrets.env`.
+  NodePorts `30300`/`30801`, `secretGenerator` from its own `secrets.env`, and
+  the host dir `$MT5_DATA_DIR/profile/dev/Config` mounted read-write over the
+  terminal's `Config`.
 * `deploy/overlays/kind-prod` — image `localhost/mt5-prod:prod`, headless, lean
-  requests/limits, same NodePorts.
+  requests/limits, same NodePorts, `fetch-profile` enabled.
 * `deploy/overlays/homelab` — the same prod workload on the real cluster: image
-  `markram92/mt5-prod:1.0.0`, `ExternalSecret` from Vault, `local-path` PVC, only
-  the API on NodePort `30801`. **Not applied yet** — see
+  `markram92/mt5-prod:1.0.0`, `ExternalSecret` for the MinIO credentials,
+  in-cluster MinIO endpoint, `local-path` PVC, only the API on NodePort `30801`.
+  **Not applied yet** — see
   [deploy/README.md](deploy/README.md#homelab-prod-overlay) for the registry,
   Vault, apply and Flux steps.
+
+### Login profile (no MT5 credentials)
+
+MT5 logs in from its **login profile** (`Config/accounts.dat`, `common.ini`,
+`servers.dat`, …), not from `MT5_SERVER`/`MT5_ACCOUNT`/`MT5_PASSWORD` — those are
+empty everywhere. In **dev** the profile is the host directory
+`$MT5_DATA_DIR/profile/dev/Config`, mounted read-write over the terminal's
+`Config` dir, so you log in manually via VNC once and MT5 keeps using it. In
+**prod** the `fetch-profile` init container copies `prod-demo/Config` from MinIO
+on the first start of an empty prefix, so the pod auto-logs in with no
+credentials.
+
+The host → MinIO copy is a **one-time operator step** (already done for account
+`26435893` on `VantageMarkets-Demo`), not a sync: `rclone copy
+~/mt5-data/profile/dev/ mt5:mt5/prod-demo/`. The complete copy-pasteable
+procedure, the expected bucket layout, the in-cluster env-based rclone config
+and the re-seed procedure for a password rotation are in
+[deploy/README.md](deploy/README.md#copying-the-login-profile-to-minio-one-time-operator-step).
 
 ### Homelab (prod)
 
 The same prod workload is prepared for the homelab Talos cluster as
 `deploy/overlays/homelab` (Docker Hub image `markram92/mt5-prod:1.0.0`,
-Vault-backed `mt5-secrets` via `ExternalSecret`, `local-path` PVC, API on
-NodePort `30801`) and is **not applied yet**. The registry push
-(`podman login docker.io` then `./scripts/push-image.sh <tag>`), the five Vault
-keys under `secret/mt5/prod`, the manual apply and the Flux registration are all
-documented in
+`fetch-profile` against the in-cluster MinIO Service, Vault-backed `mt5-minio`
+credentials via `ExternalSecret`, `local-path` PVC, API on NodePort `30801`) and
+is **not applied yet**. The registry push (`podman login docker.io` then
+`./scripts/push-image.sh <tag>`), the two Vault keys under `secret/mt5/minio`,
+the manual apply and the Flux registration are all documented in
 [deploy/README.md](deploy/README.md#homelab-prod-overlay).
 
 ### MQL5 delivery and release
@@ -123,12 +147,14 @@ kubectl kustomize deploy/overlays/homelab        # no local secrets needed
 
 ## Secrets
 
-`dev/.env`, `prod/.env` and `deploy/overlays/*/secrets.env` hold the MT5
-credentials and VNC user/password. They exist on disk only — all of them are
-gitignored, and `deploy/base/secrets.env.example` documents the expected keys.
-The kind overlays generate the Secret from their own `secrets.env`; the homelab
-overlay instead syncs the same Secret name from Vault
-(`secret/mt5/prod`) through an `ExternalSecret`.
+There are no MT5 credentials in this repo any more. `dev/.env`, `prod/.env` and
+`deploy/overlays/*/secrets.env` hold only the VNC user/password (`MT5_*` is
+empty and is re-blanked by `kind-up.sh`); they exist on disk only, are
+gitignored, and `deploy/base/secrets.env.example` documents the keys. The kind
+overlays generate the Secret from their own `secrets.env`; the homelab overlay
+takes its MinIO credentials from Vault (`secret/mt5/minio`) via an
+`ExternalSecret`. The login profile itself is a secret: bucket `mt5` stays
+private, and `credentials.minio.mt5.json` is never committed.
 
 ## Documentation
 

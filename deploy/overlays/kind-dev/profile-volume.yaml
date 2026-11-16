@@ -1,0 +1,31 @@
+# dev mode: the MT5 login profile comes from the HOST, not from credentials in
+# the environment.
+#
+# The directory below is on the kind node (extraMount of @DATA_DIR@ ->
+# /var/lib/mt5), i.e. the host path $MT5_DATA_DIR/profile/dev/Config. MT5 writes
+# accounts.dat/common.ini/servers.dat there on login, so the mount is read-write
+# and the file you log in with in dev is the exact file you can copy to MinIO
+# for prod to seed from (deploy/README.md, "Login profile lifecycle").
+#
+# A strategic merge patch is used (not a JSON patch) so the volume and its mount
+# are appended by name and never depend on the index of the existing entries.
+# scripts/kind-up.sh creates the host directory before the cluster config is
+# rendered; a hostPath of type Directory refuses to start if it is missing.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mt5
+spec:
+  template:
+    spec:
+      volumes:
+        - name: profile
+          hostPath:
+            path: /var/lib/mt5/profile/dev/Config
+            type: Directory
+      containers:
+        - name: mt5
+          volumeMounts:
+            - name: profile
+              mountPath: /opt/mt5/drive_c/Program Files/MetaTrader 5/Config
+              # read-write: MT5 updates accounts.dat/servers.dat on every login

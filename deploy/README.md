@@ -12,6 +12,8 @@ Two mutually exclusive MT5 modes on one local kind cluster:
 | API | `localhost:8001` (mt5linux) | `localhost:8001` (mt5linux) |
 | Resources | requests 250m / 512Mi, limit 2Gi | requests 100m / 256Mi, limits 1 CPU / 1Gi |
 | MQL5 source | `git clone` of this repo at `MQL5_GIT_REF` → pod `emptyDir` | same |
+| MT5 login | host dir `$MT5_DATA_DIR/profile/dev/Config` mounted rw over `…/MetaTrader 5/Config` | `fetch-profile` seeds `Config` from MinIO (bucket `mt5`, prefix `prod-demo`) on first start |
+| MT5 credentials in env | none (`MT5_*` empty) | none (`MT5_*` empty) |
 
 Both modes are the **same `Deployment/mt5`** in namespace `mt5`, mounting the
 same Wine-prefix PVC and the same MQL5 tree. They differ only in image,
@@ -28,23 +30,26 @@ deploy/
 │   ├── deployment.yaml        # Deployment mt5: Recreate, prefix PVC, shm, probes
 │   ├── service.yaml           # Service mt5: ClusterIP, vnc 3000 + mt5linux 8001
 │   ├── kustomization.yaml     # namespace mt5 + resources (no secretGenerator)
-│   └── secrets.env.example    # CUSTOM_USER/PASSWORD, MT5_SERVER/ACCOUNT/PASSWORD
+│   └── secrets.env.example    # CUSTOM_USER/PASSWORD only (MT5_* stay empty)
 ├── components/
 │   ├── kind-nodeports/
 │   │   └── kustomization.yaml # Service NodePort 30300/30801 (shared by both modes)
-│   └── prod-headless/
-│       └── kustomization.yaml # HEADLESS=true + tini entrypoint + lean resources
+│   ├── prod-headless/
+│   │   └── kustomization.yaml # HEADLESS=true + tini entrypoint + lean resources
+│   └── fetch-profile/
+│       └── kustomization.yaml # initContainer: seed login Config from MinIO (prod)
 ├── overlays/
 │   ├── kind-dev/
 │   │   ├── kustomization.yaml # image :dev, secretGenerator + kind-nodeports
+│   │   ├── profile-volume.yaml # hostPath $MT5_DATA_DIR/profile/dev/Config -> Config (rw)
 │   │   └── storage.yaml       # PV mt5-prefix-pv + PVC mt5-prefix
 │   ├── kind-prod/
-│   │   ├── kustomization.yaml # image :prod, prod-headless + kind-nodeports components
+│   │   ├── kustomization.yaml # image :prod, prod-headless + fetch-profile + kind-nodeports
 │   │   └── storage.yaml
 │   └── homelab/               # prod on the real (Talos) cluster — NOT applied yet
 │       ├── kustomization.yaml # image markram92/mt5-prod:1.0.0, NodePort 30801 only
 │       ├── storage.yaml       # PVC mt5-prefix on StorageClass local-path
-│       └── externalsecret.yaml # mt5-secrets from Vault secret/mt5/prod
+│       └── externalsecret.yaml # mt5-minio from Vault secret/mt5/minio
 ├── clusters/
 │   └── base/
 │       └── kustomization.yaml # Flux entry point -> ../../overlays/homelab
@@ -75,6 +80,104 @@ imports it with `podman save` + `kind load image-archive` (kind 0.33 relies on
 work), applies the overlay, then waits for the PVC to bind and the pod to become
 Ready.
 
+## Login profile lifecycle (no MT5 credentials)
+
+MT5 logs in from its **login profile**, not from environment variables: the
+`Config` directory (`accounts.dat`, `common.ini`, `servers.dat`, `hotkeys.ini`,
+`assistant.ini`, `certificates/`) that MT5 rewrites when you log in once.
+`MT5_SERVER`, `MT5_ACCOUNT` and `MT5_PASSWORD` are empty in every `secrets.env`,
+so no `/login:… /password:…` ever appears on the terminal command line or in the
+pod's process list.
+
+| mode | where `Config` comes from |
+|---|---|
+| **dev** | host dir `$MT5_DATA_DIR/profile/dev/Config` (= `/var/lib/mt5/profile/dev/Config` in the node), mounted **read-write** over `/opt/mt5/drive_c/Program Files/MetaTrader 5/Config`. `kind-up.sh --mode dev` creates it and, only while it is empty, seeds it from the shared prefix's `Config` file set. |
+| **prod** (kind and homelab) | the `fetch-profile` init container copies `Config` from MinIO (bucket `mt5`, prefix `prod-demo`) on the first start of a prefix that has no `accounts.dat`. |
+
+The flow is one-way and one-time: log in manually in dev once → the profile is
+on the host → copy it to MinIO once → every prod pod seeds from it and logs in
+by itself. Nothing in this repo uploads to MinIO, and there is no scheduled or
+periodic sync.
+
+### Copying the login profile to MinIO (one-time operator step)
+
+This is a **one-time bootstrap**, not a sync job: run it once per environment /
+profile version. It has already been done for the current account (bucket
+`mt5`, prefix `prod-demo`), so prod pods only seed from MinIO.
+
+Prerequisites:
+
+* `rclone` on the operator machine (the same client the init container uses).
+* `credentials.minio.mt5.json` in the repo root — gitignored, keys `url`,
+  `accessKey`, `secretKey`. **Never commit it**, and keep bucket `mt5` private:
+  `accounts.dat` is enough to open the terminal on that account.
+* A reachable MinIO endpoint. From this host and from kind pods:
+  `http://minio.tailb297d3.ts.net:9000` (tailnet). The credentials file's `url`
+  may point at a local port-forward instead, so pass the endpoint explicitly.
+
+1. Create the rclone remote once, without writing secrets into the repo:
+
+   ```bash
+   rclone config create mt5 s3 \
+     provider Minio \
+     endpoint "http://minio.tailb297d3.ts.net:9000" \
+     access_key_id "$(jq -r .accessKey credentials.minio.mt5.json)" \
+     secret_access_key "$(jq -r .secretKey credentials.minio.mt5.json)"
+   ```
+
+2. Copy the dev profile (whole directory: `Config/` and `Terminal/`):
+
+   ```bash
+   rclone copy ~/mt5-data/profile/dev/ mt5:mt5/prod-demo/ -v
+   ```
+
+   Expected tree afterwards:
+
+   ```
+   prod-demo/
+   ├── Config/accounts.dat
+   ├── Config/assistant.ini
+   ├── Config/certificates/
+   ├── Config/common.ini
+   ├── Config/hotkeys.ini
+   ├── Config/servers.dat
+   └── Terminal/{origin.txt,portable.txt,startup.ini}
+   ```
+
+   Verify with `rclone lsf mt5:mt5/prod-demo/ -R`.
+
+3. Done. The next prod pod start seeds `prod-demo/Config` into the PVC; the
+   operator is not needed again.
+
+The in-cluster equivalent of step 1 is entirely env-based (`fetch-profile`):
+ConfigMap `mt5-env` supplies `MINIO_URL` / `MINIO_BUCKET` /
+`MINIO_PROFILE_PREFIX`, Secret `mt5-minio` supplies `MINIO_ACCESS_KEY` /
+`MINIO_SECRET_KEY`, and the init container maps them to
+`RCLONE_CONFIG_SRC_*` before `rclone copy --ignore-existing
+src:$MINIO_BUCKET/$MINIO_PROFILE_PREFIX/Config …`. No rclone config file and no
+credential value is ever written to the PVC or the image.
+
+### Rotation (the only exception)
+
+A password or account change invalidates the stored profile. That is the one
+case where the one-time copy is repeated:
+
+1. log in again in dev via VNC — MT5 rewrites the mounted host `Config` dir;
+2. re-run the `rclone copy` above;
+3. force prod to re-seed: delete `Config/accounts.dat` from the PVC and restart,
+
+   ```bash
+   kubectl -n mt5 exec deploy/mt5 -- rm -f "/opt/mt5/drive_c/Program Files/MetaTrader 5/Config/accounts.dat"
+   kubectl -n mt5 rollout restart deploy/mt5
+   ```
+
+   `fetch-profile` is seed-once (`accounts.dat` present → exit 0), so without
+   that deletion it keeps the old profile.
+
+Current identifiers: account **26435893**, server **VantageMarkets-Demo**
+(balance 50,000 USD, demo). Local dev needs no MinIO at all — the profile lives
+at `$MT5_DATA_DIR/profile/dev/Config` and is host-mounted.
+
 ### First-boot prefix seeding (why there is an initContainer)
 
 Both images pre-initialize a Wine prefix at `/opt/mt5` during build, and the
@@ -98,6 +201,12 @@ cp -a /opt/mt5/. /prefix/              # one-time seed from the image
 target path is still `/opt/mt5`, so the paths recorded in the prefix registry
 stay valid. After this, `start.sh` skips `wineboot`, installs Wine Mono
 silently, and proceeds to install MT5.
+
+The prod overlays add a third init container, `fetch-profile`, which **runs last**
+by construction (the component appends it with a JSON patch — a strategic merge
+patch would put it first, and then `seed-prefix` would overwrite the seeded
+`Config/common.ini`/`servers.dat` with the image defaults). It only acts when
+`Config/accounts.dat` is absent, so an initialized prefix is never touched.
 
 ### Cross-mode prefix updates (`prepare-prefix`)
 
@@ -208,6 +317,16 @@ extraMounts whose host path does not exist.
 * `startup.ini` is **not** mounted: `start.sh` rewrites it from the
   `MT5_AUTO_START_*` env on every launch.
 * `/dev/shm` is a 256Mi memory-backed emptyDir.
+* **dev** mounts one extra host directory over the terminal's config:
+  `/var/lib/mt5/profile/dev/Config` (host `$MT5_DATA_DIR/profile/dev/Config`,
+  created by `kind-up.sh`) at
+  `/opt/mt5/drive_c/Program Files/MetaTrader 5/Config`, read-write. It is inside
+  the existing `@DATA_DIR@` extraMount, so adding it needs no cluster recreate.
+  The mount sits *above* the prefix PVC for that one path: MT5's login state
+  lives on the host, not in the shared prefix, and prod gets the same file set
+  from MinIO instead.
+* **prod** has no such mount; `fetch-profile` copies `Config` from MinIO into the
+  prefix PVC on the first start (seed-once).
 * `hostAliases` maps `update.mql5.com` / `updates.mql5.com` to 127.0.0.1; k8s
   regenerates `/etc/hosts`, so this is the only way to keep MT5 LiveUpdate
   blocked.
@@ -233,41 +352,49 @@ exists only in the `emptyDir` and is lost on restart.
 
 ## Secrets
 
-There are two backends, chosen by the overlay:
+There are two secrets, and only one of them is about MT5 at all:
 
-* **`kind-dev` / `kind-prod`** — a `secretGenerator` (`mt5-secrets`,
-  `disableNameSuffixHash: true`) reads a `secrets.env` that sits **inside the
+* **`mt5-secrets`** (kind overlays only, optional on base) — a `secretGenerator`
+  (`disableNameSuffixHash: true`) reads a `secrets.env` that sits **inside the
   overlay** (`deploy/overlays/kind-dev/secrets.env`,
-  `deploy/overlays/kind-prod/secrets.env`). It is not in `base/` because
-  kustomize refuses an env file outside the kustomization root
-  (`security; file … is not in or below …`), and because the base must render
-  from committed files alone so the homelab overlay can replace the Secret with
-  an `ExternalSecret`.
-* **`homelab`** — the same Secret name is produced from Vault by an
-  `ExternalSecret`; see "Homelab (prod) overlay" below.
+  `deploy/overlays/kind-prod/secrets.env`). It carries only the VNC pair
+  (`CUSTOM_USER`/`PASSWORD`, consumed by the dev image's KasmVNC). `MT5_*` keys
+  are present but **empty**: MT5 logs in from the profile (see "Login profile
+  lifecycle"). The base Deployment declares the ref `optional: true`, so a prod
+  cluster can run with no Secret at all.
+* **`mt5-minio`** (prod overlays only) — MinIO credentials for the
+  `fetch-profile` init container: `MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY`. On kind
+  it is generated by `kind-up.sh --mode prod` from the gitignored
+  `credentials.minio.mt5.json` (`kubectl create secret … --dry-run=client -o
+  yaml | kubectl apply -f -`, values passed through a 0600 temp env file, never
+  printed); on the homelab cluster it comes from Vault via an `ExternalSecret`.
 
 `kind-up.sh` creates the overlay's `secrets.env` on first run from that mode's
 `.env` (`dev/.env` for dev, `prod/.env` for prod) by reading
-`MT5_VNC_USER`, `MT5_VNC_PASSWORD`, `MT5_SERVER`, `MT5_ACCOUNT`,
-`MT5_PASSWORD` with `grep`/`cut` — the file is never `source`d — and writes it:
+`MT5_VNC_USER` and `MT5_VNC_PASSWORD` with `grep`/`cut` — the file is never
+`source`d:
 
 | secrets.env key | Source `.env` key | Consumed as |
 |---|---|---|
-| `CUSTOM_USER` | `MT5_VNC_USER` | KasmVNC user |
-| `PASSWORD` | `MT5_VNC_PASSWORD` | KasmVNC password |
-| `MT5_SERVER` | `MT5_SERVER` | MT5 `/login` server |
-| `MT5_ACCOUNT` | `MT5_ACCOUNT` | MT5 `/login` account |
-| `MT5_PASSWORD` | `MT5_PASSWORD` | MT5 `/login` password |
+| `CUSTOM_USER` | `MT5_VNC_USER` | KasmVNC user (dev only) |
+| `PASSWORD` | `MT5_VNC_PASSWORD` | KasmVNC password (dev only) |
+| `MT5_SERVER` | — (always empty) | unused: login comes from the profile |
+| `MT5_ACCOUNT` | — (always empty) | unused |
+| `MT5_PASSWORD` | — (always empty) | unused |
+
+Every run also rewrites any pre-existing `MT5_*` value to empty, so an old
+`secrets.env` from the credential era cannot leak a password onto the terminal
+command line. `start.sh` then launches MT5 without `/login` arguments and MT5
+auto-logs in from `Config/accounts.dat`.
 
 If the mode's `.env` does not exist either, the script copies
 `base/secrets.env.example` to the overlay's `secrets.env`, exits `1` and tells
-you to fill it in. Empty `MT5_*` values are acceptable — `start.sh` then
-launches MT5 without `/login` arguments.
+you to fill in `CUSTOM_USER`/`PASSWORD`.
 
 Each overlay's `secrets.env` is generated **only when absent**, so dev and prod
-keep independent credentials and re-running `kind-up.sh` never overwrites a file
-you already filled in. Delete `deploy/overlays/<mode>/secrets.env` to regenerate
-it from that mode's `.env`.
+keep independent VNC credentials and re-running `kind-up.sh` never overwrites a
+file you already filled in. Delete `deploy/overlays/<mode>/secrets.env` to
+regenerate it from that mode's `.env`.
 
 Because this checkout is on **exFAT**, which stores no POSIX modes, `chmod 600`
 on those files is a no-op; the script verifies the mode and prints a warning
@@ -275,7 +402,9 @@ instead of pretending the file is private. Do not put production credentials in
 an exFAT checkout.
 
 Non-secret configuration lives in `ConfigMap mt5-env` in `base/configmap.yaml`:
-`MQL5_GIT_URL`/`MQL5_GIT_REF`, `VNC_RESOLUTION`, `COMPANY_ENV`,
+`MQL5_GIT_URL`/`MQL5_GIT_REF`, `MINIO_URL`/`MINIO_BUCKET`/
+`MINIO_PROFILE_PREFIX` (login-profile source for `fetch-profile`),
+`VNC_RESOLUTION`, `COMPANY_ENV`,
 `COMPANY_REGION`, `MT5_BROKER_SERVER`, `MT5_BROKER_PORT`,
 `ENABLE_MT5LINUX_API`, `MT5_AUTO_START_EA/SYMBOL/PERIOD`,
 `LOG_RETENTION_DAYS`, `LOG_RETENTION_INTERVAL`, `HEADLESS`, `WINEPREFIX`,
@@ -314,31 +443,32 @@ auth store. A pushed tag has to match the overlay's `newTag`; re-pushing an
 existing tag does not update a running pod (the Deployment is
 `imagePullPolicy: IfNotPresent`), so use a new tag or `kubectl rollout restart`.
 
-### 2. Vault: write the five keys
+### 2. Vault: write the MinIO keys
 
-The homelab overlay has **no `secretGenerator`**. `externalsecret.yaml` asks the
-external-secrets operator (ClusterSecretStore `vault-backend`, the fleet
-convention) to materialize Secret `mt5-secrets` from Vault:
+The homelab overlay has **no `secretGenerator`** and no MT5 credential Secret:
+MT5 logs in from the profile in MinIO, exactly like `kind-prod`.
+`externalsecret.yaml` asks the external-secrets operator (ClusterSecretStore
+`vault-backend`, the fleet convention) to materialize Secret **`mt5-minio`**,
+which only the `fetch-profile` init container reads:
 
-| key | consumer |
-|---|---|
-| `CUSTOM_USER` | KasmVNC user (unused in headless, still required by `start.sh`) |
-| `PASSWORD` | KasmVNC password (unused in headless) |
-| `MT5_SERVER` | MT5 `/login` server |
-| `MT5_ACCOUNT` | MT5 `/login` account |
-| `MT5_PASSWORD` | MT5 `/login` password |
+| Secret key | Vault property | consumer |
+|---|---|---|
+| `MINIO_ACCESS_KEY` | `access_key` | `fetch-profile` → `RCLONE_CONFIG_SRC_ACCESS_KEY_ID` |
+| `MINIO_SECRET_KEY` | `secret_key` | `fetch-profile` → `RCLONE_CONFIG_SRC_SECRET_ACCESS_KEY` |
 
-Vault path: **`secret/mt5/prod`**, one property per key, `refreshInterval: 1h`.
-Write it before applying:
+Vault path: **`secret/mt5/minio`**, `refreshInterval: 1h`. Write it before
+applying:
 
 ```bash
-vault kv put secret/mt5/prod \
-  CUSTOM_USER=... PASSWORD=... MT5_SERVER=... MT5_ACCOUNT=... MT5_PASSWORD=...
+vault kv put secret/mt5/minio access_key=... secret_key=...
 ```
 
 Until the path exists, the ExternalSecret reports `SecretSyncedError` and the
-pod sits in `CreateContainerConfigError` (Secret `mt5-secrets` absent). Nothing
-in the repo holds these values.
+pod sits in `CreateContainerConfigError` (Secret `mt5-minio` absent). Nothing in
+the repo holds these values. Bucket `mt5`, prefix `prod-demo` and the in-cluster
+endpoint (`http://minio.minio.svc.cluster.local:9000`, patched over the base
+`MINIO_URL`) come from ConfigMap `mt5-env`; the profile itself must already be
+uploaded (see "Copying the login profile to MinIO").
 
 ### 3. Apply
 
@@ -381,6 +511,13 @@ kustomize-builds that one directory, which resolves to
 * **MQL5.** Unchanged: the `fetch-mql5` init container clones this repo at the
   pinned tag `mql5-v1` (`ConfigMap mt5-env`) into a per-pod `emptyDir`; the
   image carries no MQL5.
+* **Login profile.** The same `fetch-profile` component as `kind-prod`, but
+  `MINIO_URL` is patched to the in-cluster Service
+  `http://minio.minio.svc.cluster.local:9000` (bucket `mt5`, prefix
+  `prod-demo`, unchanged). Credentials come from Vault via the `mt5-minio`
+  `ExternalSecret`, never from a file. Because the PVC starts empty, the first
+  rollout seeds both the Wine prefix and the login profile; MT5 then logs in with
+  no credentials at all.
 * **Namespace.** `Namespace mt5` is part of the render, so the first real apply
   creates it. A `--dry-run=server` run still fails on the namespaced objects
   until it exists (dry-run never persists the namespace), which is expected and
@@ -388,21 +525,24 @@ kustomize-builds that one directory, which resolves to
 
 ## Security notes
 
-* **MT5 credentials are visible in the pod.** `start.sh` passes them on the
-  `terminal64.exe` command line, so they appear in the pod's process list
-  (`kubectl -n mt5 exec deploy/mt5 -- ps aux` → `/login:<account>
-  /password:<password> /server:<server>`) and in the container log line that
-  echoes the server and account. Anyone who can `exec` into the pod or read its
-  logs can read them: restrict `pods/exec` and `pods/log` RBAC (and local
-  `kubectl` access to the cluster) accordingly. This is inherited from
-  `start.sh`, not introduced by the manifests.
+* **MT5 no longer puts credentials on a command line.** `MT5_*` is empty by
+  design, so `ps aux` inside the pod shows no `/login:/password:` — MT5 logs in
+  from `Config/accounts.dat`.
+* **The profile is the credential now.** `accounts.dat` is enough to open the
+  terminal on that account, so treat it as a secret: keep bucket `mt5` private,
+  never commit the profile, and restrict `pods/exec`/`pods/log` (and local
+  `kubectl` access) on the `mt5` namespace. Anyone who can read the PVC, the dev
+  host dir (`$MT5_DATA_DIR/profile/dev/Config`) or the MinIO bucket can use the
+  account.
+* **MinIO credentials never enter the repo.** The kind path reads
+  `credentials.minio.mt5.json` (gitignored) through a 0600 temp env file and
+  applies Secret `mt5-minio`; no value is printed or committed. The homelab path
+  materializes the same Secret from Vault (`secret/mt5/minio`).
 * **The kind overlays' `secrets.env` sit on exFAT**, where `chmod 600` is a
   no-op, so those files are readable by any local user who can read the
-  checkout. `kind-up.sh` verifies the mode and warns instead of implying the
-  file is private; keep real credentials out of this checkout (or move
-  `deploy/` to a POSIX filesystem). The homelab overlay avoids the problem
-  entirely: its credentials are materialized into the cluster from Vault by the
-  ExternalSecret and never exist as a file here.
+  checkout. They now hold only the VNC pair. `kind-up.sh` verifies the mode and
+  warns instead of implying the file is private; keep real credentials out of
+  this checkout (or move `deploy/` to a POSIX filesystem).
 * The KasmVNC UI (dev mode only) is published on host `:3000` with the
   `CUSTOM_USER`/`PASSWORD` pair from that file; prod exposes only the mt5linux
   API on `:8001`, with no authentication of its own.
@@ -455,6 +595,15 @@ if it times out, watch progress with `kubectl -n mt5 logs deploy/mt5 -f`.
 * **`deploy/registries.conf` + `CONTAINERS_REGISTRIES_CONF`** — see the
   short-name note above; needed because this host has no
   `/etc/containers/registries.conf`.
+* **Login profile is served by `rclone/rclone:1.76.0`, not `minio/mc`.** MinIO
+  withdrew `minio/mc` and `minio/minio` from Docker Hub (all tags are
+  pull-denied; upstream fallout: ClickHouse #120459) and quay.io requires auth,
+  so the `mc` image cannot be pulled. The Chainguard replacement is distroless
+  (no `/bin/sh`, so the seed-once conditional cannot run) and the Bitnami legacy
+  image runs as uid 1001, which cannot write the root-owned prefix. `rclone`
+  runs as root, has `/bin/sh`, speaks the same S3/MinIO API, and is already the
+  client the operator uses for the one-time upload. Tag `1.76.0` matches the
+  host binary; it is pinned, never `:latest`.
 
 ## Verifying a render without a cluster
 
@@ -466,6 +615,20 @@ kubectl kustomize deploy/overlays/homelab        > /dev/null   # no local secret
 kubectl kustomize deploy/clusters/base           > /dev/null   # Flux entry point
 kubectl --context admin@homelab-cluster apply --dry-run=client -k deploy/overlays/homelab
 bash -n scripts/kind-up.sh && bash -n scripts/kind-down.sh && bash -n scripts/push-image.sh
+```
+
+Profile wiring is part of that check:
+
+```bash
+# dev: hostPath Config mount, and NO fetch-profile
+kubectl kustomize deploy/overlays/kind-dev \
+  | grep -A3 'hostPath:' | grep -q '/var/lib/mt5/profile/dev/Config'
+kubectl kustomize deploy/overlays/kind-dev | grep -c fetch-profile   # must be 0
+
+# prod: fetch-profile runs LAST (after seed-prefix/prepare-prefix) with the
+# expected bucket/prefix and, on the homelab overlay, the in-cluster endpoint
+kubectl kustomize deploy/overlays/kind-prod | grep -A2 'name: fetch-profile'
+kubectl kustomize deploy/overlays/homelab | grep 'MINIO_URL:'
 ```
 
 The kind overlays each need their own `secrets.env` (run `kind-up.sh` once for

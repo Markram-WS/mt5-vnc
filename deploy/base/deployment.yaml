@@ -130,8 +130,13 @@ spec:
           envFrom:
             - configMapRef:
                 name: mt5-env
+            # CUSTOM_USER/PASSWORD feed the dev image's KasmVNC init; MT5 itself
+            # no longer takes credentials from the environment at all — it logs
+            # in from the login profile (dev: host mount, prod: fetch-profile).
+            # optional: a prod cluster may legitimately run with no Secret.
             - secretRef:
                 name: mt5-secrets
+                optional: true
           ports:
             - name: vnc
               containerPort: 3000

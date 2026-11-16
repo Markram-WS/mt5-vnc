@@ -11,10 +11,12 @@ resources:
   - externalsecret.yaml
 
 # Same prod deltas as kind-prod (HEADLESS=true, tini entrypoint, lean
-# resources). No kind-nodeports component: the homelab cluster has no kind
-# port mappings, and this overlay publishes only the API.
+# resources), plus the same fetch-profile component. No kind-nodeports
+# component: the homelab cluster has no kind port mappings, and this overlay
+# publishes only the API.
 components:
   - ../../components/prod-headless
+  - ../../components/fetch-profile
 
 images:
   - name: mt5
@@ -22,6 +24,16 @@ images:
     newTag: 1.0.0
 
 patches:
+  # MinIO is in-cluster on the homelab cluster: use the Service DNS name instead
+  # of the tailnet endpoint the kind overlays use (same bucket/prefix).
+  - target:
+      kind: ConfigMap
+      name: mt5-env
+    patch: |-
+      - op: replace
+        path: /data/MINIO_URL
+        value: http://minio.minio.svc.cluster.local:9000
+
   # The Service keeps ONLY the mt5linux API: prod is headless, so there is no
   # VNC port to publish. 30801 matches the port the kind overlays use, so the
   # client side stays the same across clusters.

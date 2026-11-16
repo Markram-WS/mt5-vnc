@@ -81,6 +81,17 @@ DATA_DIR="${MT5_DATA_DIR:-$HOME/mt5-data}"
 # UNIX symlinks, which exFAT cannot store (the repo itself is on exFAT).
 DATA_DIR="${DATA_DIR%/}"
 
+# dev login profile: the host directory mounted (read-write) over the terminal's
+# Config dir in dev mode. It is inside $DATA_DIR, which the kind node already
+# extraMounts at /var/lib/mt5, so adding it needs no cluster recreation. MT5
+# writes accounts.dat/servers.dat here on login; this is also the exact tree the
+# operator copies to MinIO for prod to seed from (deploy/README.md).
+PROFILE_DEV_DIR="$DATA_DIR/profile/dev/Config"
+PREFIX_PROFILE_DIR="$DATA_DIR/prefix/drive_c/Program Files/MetaTrader 5/Config"
+# MinIO credentials for prod's fetch-profile init container. Gitignored and never
+# printed; the Secret is generated from it, not from the repo.
+MINIO_CREDENTIALS="${MT5_MINIO_CREDENTIALS:-$REPO_ROOT/credentials.minio.mt5.json}"
+
 case "$MODE" in
     dev)
         IMAGE="localhost/mt5-dev:dev"
@@ -113,6 +124,7 @@ trap 'echo "ERROR: command failed on line $LINENO: $BASH_COMMAND" >&2' ERR
 cleanup() {
     rm -f "$RENDERED_CONFIG"
     rm -f "${IMAGE_TMPDIR}"/kind-image-*.tar
+    rm -f "${TMPDIR:-/tmp}"/mt5-minio.??????
     rm -rf "${TMPDIR:-/tmp}"/kind-build-mt5-dev "${TMPDIR:-/tmp}"/kind-build-mt5-prod
 }
 trap 'status=$?; cleanup; exit $status' EXIT
@@ -181,9 +193,25 @@ env_value() {
     printf '%s' "$line"
 }
 
+# Read one key out of a JSON file without printing it (jq preferred, python3 as
+# a fallback). Used only for the MinIO credential file.
+json_value() {
+    local file="$1" key="$2"
+    if command -v jq >/dev/null 2>&1; then
+        jq -er --arg k "$key" '.[$k]' "$file"
+    else
+        python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$file" "$key"
+    fi
+}
+
 # Credentials for this mode's overlay. Never printed, never committed: the file
 # is written mode 0600 (best effort on exFAT) from the mode's .env, and only
 # when it does not exist yet — a later run of the other mode keeps its own file.
+#
+# MT5 no longer takes credentials from the environment in EITHER mode: dev logs
+# in from the host-mounted Config directory, prod seeds it from MinIO
+# (fetch-profile). The MT5_* keys therefore stay empty; only the VNC pair
+# (CUSTOM_USER/PASSWORD) is a real secret here.
 echo "==> Checking $SECRETS_FILE"
 if [ ! -f "$SECRETS_FILE" ]; then
     if [ ! -f "$ENV_FILE" ]; then
@@ -191,7 +219,7 @@ if [ ! -f "$SECRETS_FILE" ]; then
         chmod 600 "$SECRETS_FILE"
         echo "ERROR: $SECRETS_FILE was missing and $ENV_FILE does not exist." >&2
         echo "A template was copied from $SECRETS_EXAMPLE (mode 0600)." >&2
-        echo "Fill in CUSTOM_USER, PASSWORD, MT5_SERVER, MT5_ACCOUNT and MT5_PASSWORD, then re-run." >&2
+        echo "Fill in CUSTOM_USER and PASSWORD (VNC only), then re-run." >&2
         exit 1
     fi
     echo "==> Generating $SECRETS_FILE from $ENV_FILE"
@@ -200,9 +228,9 @@ if [ ! -f "$SECRETS_FILE" ]; then
         {
             printf 'CUSTOM_USER=%s\n' "$(env_value "$ENV_FILE" MT5_VNC_USER)"
             printf 'PASSWORD=%s\n' "$(env_value "$ENV_FILE" MT5_VNC_PASSWORD)"
-            printf 'MT5_SERVER=%s\n' "$(env_value "$ENV_FILE" MT5_SERVER)"
-            printf 'MT5_ACCOUNT=%s\n' "$(env_value "$ENV_FILE" MT5_ACCOUNT)"
-            printf 'MT5_PASSWORD=%s\n' "$(env_value "$ENV_FILE" MT5_PASSWORD)"
+            printf 'MT5_SERVER=\n'
+            printf 'MT5_ACCOUNT=\n'
+            printf 'MT5_PASSWORD=\n'
         } > "$SECRETS_FILE"
     )
     chmod 600 "$SECRETS_FILE"
@@ -214,8 +242,48 @@ if [ ! -f "$SECRETS_FILE" ]; then
     fi
 fi
 
+# Enforce profile-only login on an existing file too: a secrets.env written
+# before the profile existed would otherwise pass stale MT5_* values on the
+# terminal's command line (and appear in the pod's process list).
+blank_mt5_keys() {
+    local file="$1" line tmp
+    tmp="$(mktemp "${TMPDIR:-/tmp}/mt5-secrets.XXXXXX")"
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            MT5_SERVER=*|MT5_ACCOUNT=*|MT5_PASSWORD=*)
+                printf '%s=\n' "${line%%=*}" ;;
+            *)
+                printf '%s\n' "$line" ;;
+        esac
+    done < "$file" > "$tmp"
+    cat "$tmp" > "$file"
+    rm -f "$tmp"
+}
+blank_mt5_keys "$SECRETS_FILE"
+if [ "$MODE" = dev ]; then
+    echo "==> dev logs in from the mounted profile at $PROFILE_DEV_DIR (MT5_* env is empty)."
+    echo "    Log in manually via VNC only when that profile is first created."
+else
+    echo "==> prod logs in from the profile seeded by fetch-profile (MT5_* env is empty)."
+fi
+
 echo "==> Ensuring prefix data dir '$DATA_DIR' exists"
 mkdir -p "$DATA_DIR/prefix"
+
+# The dev overlay mounts this host directory (hostPath type Directory) over the
+# terminal's Config dir, so it must exist before the cluster config is rendered
+# / the pod starts. Seed it ONCE from the shared prefix's Config file set (not
+# the whole prefix) when it is still empty; after that MT5 owns it.
+echo "==> Ensuring dev login-profile dir '$PROFILE_DEV_DIR' exists"
+mkdir -p "$PROFILE_DEV_DIR"
+if [ "$MODE" = dev ] && [ -z "$(find "$PROFILE_DEV_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+    if [ -d "$PREFIX_PROFILE_DIR" ]; then
+        echo "==> Seeding the empty dev profile dir from the prefix Config file set"
+        cp -a "$PREFIX_PROFILE_DIR"/. "$PROFILE_DEV_DIR"/
+    else
+        echo "==> No prefix Config to seed from yet; log in once via VNC to create the profile"
+    fi
+fi
 
 echo "==> Rendering kind cluster config from $KIND_CONFIG_TMPL"
 sed -e "s|@REPO_ROOT@|$REPO_ROOT|g" -e "s|@DATA_DIR@|$DATA_DIR|g" "$KIND_CONFIG_TMPL" > "$RENDERED_CONFIG"
@@ -244,6 +312,29 @@ podman exec "$NODE_NAME" crictl images "$IMAGE"
 
 echo "==> Applying kustomize overlay $OVERLAY"
 kubectl apply -k "$OVERLAY"
+
+# The fetch-profile init container reads MinIO credentials from Secret
+# mt5-minio (kind-prod has no ExternalSecret). Generated from the gitignored
+# credentials JSON through a mode-0600 temp env file, so no value ever appears on
+# a command line or in this script's output; the file is removed right after.
+if [ "$MODE" = prod ]; then
+    if [ ! -f "$MINIO_CREDENTIALS" ]; then
+        echo "ERROR: $MINIO_CREDENTIALS is missing; fetch-profile needs the MinIO credentials." >&2
+        echo "       It holds url/accessKey/secretKey and is gitignored (never commit it)." >&2
+        exit 1
+    fi
+    echo "==> Materializing Secret mt5-minio from $MINIO_CREDENTIALS"
+    minio_env="$(mktemp "${TMPDIR:-/tmp}/mt5-minio.XXXXXX")"
+    (
+        umask 077
+        printf 'MINIO_ACCESS_KEY=%s\n' "$(json_value "$MINIO_CREDENTIALS" accessKey)"
+        printf 'MINIO_SECRET_KEY=%s\n' "$(json_value "$MINIO_CREDENTIALS" secretKey)"
+    ) > "$minio_env"
+    kubectl -n mt5 create secret generic mt5-minio \
+        --from-env-file="$minio_env" \
+        --dry-run=client -o yaml | kubectl apply -f -
+    rm -f "$minio_env"
+fi
 
 echo "==> Enforcing single-Deployment exclusivity"
 deployments="$(kubectl -n mt5 get deployment -o name | sort)"

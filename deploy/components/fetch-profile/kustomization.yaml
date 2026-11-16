@@ -1,0 +1,80 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# Seed the MT5 login profile into an EMPTY prefix from MinIO (prod only).
+#
+# The profile (accounts.dat, common.ini, servers.dat, ...) is what makes MT5 log
+# in by itself: no MT5_SERVER/MT5_ACCOUNT/MT5_PASSWORD anywhere. It is produced
+# once by logging in manually in dev, then copied to MinIO by the operator
+# (deploy/README.md, "Copying the login profile to MinIO"); this init container
+# is the only consumer.
+#
+# Seed-once by design: when Config/accounts.dat already exists in the prefix the
+# container logs and exits immediately, so a pod restart never touches a profile
+# MT5 has since updated. Re-seeding is an explicit operator action (delete
+# Config/accounts.dat from the PVC, then rollout restart) — there is no periodic
+# sync and nothing in this repo ever uploads to MinIO.
+#
+# Client choice: rclone, not `mc`. MinIO withdrew minio/mc and minio/minio from
+# Docker Hub (every tag is pull-denied since 2026-09-16) and quay.io requires
+# auth, so minio/mc cannot be pulled at all; the Chainguard replacement is
+# distroless (no /bin/sh) and the Bitnami one runs as uid 1001, which cannot
+# write the root-owned prefix. rclone is pullable, runs as root, has /bin/sh and
+# speaks the same S3/MinIO API — and it is already the client the operator uses
+# for the one-time upload, so the repo keeps one MinIO vocabulary.
+#
+# Opted into by prod overlays only (kind-prod, homelab); the dev overlay mounts
+# the host Config directory instead.
+patches:
+  # JSON patch (not strategic merge): it APPENDS fetch-profile after
+  # seed-prefix/prepare-prefix. Order matters — the one-time image seed must
+  # finish first, otherwise `cp -a /opt/mt5/. /prefix/` would overwrite the
+  # copied common.ini/servers.dat with the image's defaults before MT5 ever
+  # reads them. (A strategic merge patch is inserted at the head of
+  # initContainers by kustomize, which is exactly the wrong order.)
+  - target:
+      kind: Deployment
+      name: mt5
+    patch: |-
+      - op: add
+        path: /spec/template/spec/initContainers/-
+        value:
+          name: fetch-profile
+          image: docker.io/rclone/rclone:1.76.0
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: mt5-env
+            - secretRef:
+                name: mt5-minio
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              CONFIG_DIR="/opt/mt5/drive_c/Program Files/MetaTrader 5/Config"
+              if [ -f "$CONFIG_DIR/accounts.dat" ]; then
+                echo "[init-profile] profile already seeded; leaving it untouched"
+                exit 0
+              fi
+              # Remote defined entirely from env (no config file, no secret on
+              # disk); /tmp is the pod's scratch space.
+              export RCLONE_CONFIG_SRC_TYPE=s3
+              export RCLONE_CONFIG_SRC_PROVIDER=Minio
+              export RCLONE_CONFIG_SRC_ENDPOINT="$MINIO_URL"
+              export RCLONE_CONFIG_SRC_ACCESS_KEY_ID="$MINIO_ACCESS_KEY"
+              export RCLONE_CONFIG_SRC_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY"
+              echo "[init-profile] seeding profile from $MINIO_BUCKET/$MINIO_PROFILE_PREFIX/Config"
+              rclone --config /tmp/rclone.conf copy --ignore-existing \
+                "src:$MINIO_BUCKET/$MINIO_PROFILE_PREFIX/Config" "$CONFIG_DIR"
+              if [ ! -f "$CONFIG_DIR/accounts.dat" ]; then
+                echo "[init-profile] ERROR: $MINIO_BUCKET/$MINIO_PROFILE_PREFIX/Config/accounts.dat is missing after copy" >&2
+                echo "[init-profile] Upload the profile first (deploy/README.md, 'Copying the login profile to MinIO')." >&2
+                exit 1
+              fi
+              echo "[init-profile] seeded $(find "$CONFIG_DIR" -type f | wc -l) files into $CONFIG_DIR"
+          volumeMounts:
+            # Same prefix the app container mounts, so the copied files land
+            # exactly where terminal64.exe reads them.
+            - name: prefix
+              mountPath: /opt/mt5

@@ -23,6 +23,13 @@ data:
   # one tree (git clone --branch accepts branches and tags, not raw SHAs).
   MQL5_GIT_URL: "https://github.com/Markram-WS/mt5-vnc.git"
   MQL5_GIT_REF: "mql5-v1"
+  # Login-profile source for the fetch-profile init container (prod overlays).
+  # MT5 logs in from this profile alone; there are no MT5 credentials anywhere.
+  # The kind overlays reach MinIO over the tailnet, the homelab overlay patches
+  # MINIO_URL to the in-cluster Service.
+  MINIO_URL: "http://minio.tailb297d3.ts.net:9000"
+  MINIO_BUCKET: "mt5"
+  MINIO_PROFILE_PREFIX: "prod-demo"
   VNC_RESOLUTION: "1280x800"
   COMPANY_ENV: "production"
   COMPANY_REGION: "us-east-1"
