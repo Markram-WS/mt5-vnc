@@ -11,11 +11,12 @@ Two mutually exclusive MT5 modes on one local kind cluster:
 | `HEADLESS` | `false` | `true` |
 | API | `localhost:8001` (mt5linux) | `localhost:8001` (mt5linux) |
 | Resources | requests 250m / 512Mi, limit 2Gi | requests 100m / 256Mi, limits 1 CPU / 1Gi |
-| MQL5 source | `/var/lib/mt5/dev-mql5` | `/var/lib/mt5/prod-mql5` |
+| MQL5 source | `/var/lib/mt5/mql5` (shared `mql5/` tree) | same |
 
 Both modes are the **same `Deployment/mt5`** in namespace `mt5`, mounting the
-same Wine-prefix PVC. They differ only in image, `HEADLESS`, resources and the
-MQL5 host path, so a mode switch is an in-place update, not a second workload.
+same Wine-prefix PVC and the same MQL5 tree. They differ only in image,
+`HEADLESS` and resources, so a mode switch is an in-place update, not a second
+workload.
 
 ## Layout
 
@@ -30,10 +31,10 @@ deploy/
 │   └── secrets.env.example    # CUSTOM_USER/PASSWORD, MT5_SERVER/ACCOUNT/PASSWORD
 ├── overlays/
 │   ├── kind-dev/
-│   │   ├── kustomization.yaml # image :dev, NodePorts, dev MQL5 hostPath
+│   │   ├── kustomization.yaml # image :dev, NodePorts, shared MQL5 hostPath
 │   │   └── storage.yaml       # PV mt5-prefix-pv + PVC mt5-prefix
 │   └── kind-prod/
-│       ├── kustomization.yaml # image :prod, NodePorts, HEADLESS=true, lower limits, prod MQL5
+│       ├── kustomization.yaml # image :prod, NodePorts, HEADLESS=true, lower limits
 │       └── storage.yaml
 ├── kind-cluster.yaml.tmpl     # kind Cluster (placeholders @REPO_ROOT@ / @DATA_DIR@)
 ├── registries.conf            # short-name aliases (host has no /etc/containers/registries.conf)
@@ -145,8 +146,7 @@ the resolution deterministic instead of search-order dependent.
   in both modes because the modes never run simultaneously; in prod nothing
   ever listens on 3000;
 * extraMounts: `@DATA_DIR@` → `/var/lib/mt5`,
-  `@REPO_ROOT@/dev/mql5` → `/var/lib/mt5/dev-mql5`,
-  `@REPO_ROOT@/prod/mql5` → `/var/lib/mt5/prod-mql5`.
+  `@REPO_ROOT@/mql5` → `/var/lib/mt5/mql5` (one shared tree for both overlays).
 
 `$MT5_DATA_DIR` defaults to `$HOME/mt5-data` and **must be on a non-exFAT
 filesystem**: Wine maps built-in DLLs with UNIX symlinks, so a prefix on exFAT
@@ -169,9 +169,10 @@ extraMounts whose host path does not exist.
 * **The prefix is single-writer.** dev and prod must not run simultaneously;
   `strategy: Recreate` plus one Deployment enforces that structurally (the old
   pod is fully gone before the new one mounts the PVC).
-* MQL5 is a per-mode hostPath mounted at
-  `/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5`, which deliberately hides
-  the copy baked into the image — exactly like the compose bind mount.
+* MQL5 is the repo's single `mql5/` tree, mounted from hostPath
+  `/var/lib/mt5/mql5` at `/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5` in
+  both overlays — exactly like the compose bind mount. No image bakes MQL5 in,
+  so the tree is the only source and a mode switch changes nothing about it.
 * `startup.ini` is **not** mounted: `start.sh` rewrites it from the
   `MT5_AUTO_START_*` env on every launch.
 * `/dev/shm` is a 256Mi memory-backed emptyDir (compose `shm_size: 256m`).
@@ -179,10 +180,12 @@ extraMounts whose host path does not exist.
   compose `extra_hosts`); k8s regenerates `/etc/hosts`, so this is the only way
   to keep MT5 LiveUpdate blocked.
 
-`dev/mql5` and `prod/mql5` carry their own `.gitignore` (`*`, `*/`,
-`!.gitignore`), so MQL5 files must be added with `git add -f`. `MQL5/Profiles`
-is tracked deliberately: `startup.ini`'s `[StartUp] Expert` attaches to the
-default chart profile, so without it MT5 boots but never loads the expert.
+`mql5/` carries the stock MT5 `.gitignore` (`*`, `*/`, `!.gitignore`), so MQL5
+files must be added with `git add -f`. `mql5/Profiles` is tracked deliberately:
+`startup.ini`'s `[StartUp] Expert` attaches to the default chart profile, so
+without it MT5 boots but never loads the expert. MT5 rewrites
+`mql5/Profiles/Agents/metatrader-default.md` at runtime, so that file shows up
+as modified after a session (`git checkout -- mql5/Profiles` restores it).
 
 ## Secrets
 

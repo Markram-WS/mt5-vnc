@@ -31,9 +31,9 @@ patches:
         path: /spec/ports/1/nodePort
         value: 30801
 
-  # MQL5 tree for this mode. Replaced wholesale (JSON6902) because a strategic
-  # merge would leave the base's emptyDir source next to the new hostPath and
-  # produce an invalid volume.
+  # MQL5 tree (the repo's single shared mql5/). Replaced wholesale (JSON6902)
+  # because a strategic merge would leave the base's emptyDir source next to
+  # the new hostPath and produce an invalid volume.
   - target:
       kind: Deployment
       name: mt5
@@ -46,5 +46,5 @@ patches:
         value:
           name: mql5
           hostPath:
-            path: /var/lib/mt5/dev-mql5
+            path: /var/lib/mt5/mql5
             type: Directory

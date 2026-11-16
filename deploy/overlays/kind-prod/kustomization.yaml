@@ -64,7 +64,7 @@ patches:
         value:
           name: mql5
           hostPath:
-            path: /var/lib/mt5/prod-mql5
+            path: /var/lib/mt5/mql5
             type: Directory
       # Lean headless footprint (no KasmVNC/nginx/s6 stack to run).
       - op: replace

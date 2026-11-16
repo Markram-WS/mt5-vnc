@@ -43,8 +43,8 @@ services:
       # SHARE the EXACT volume dev uses (login + MT5 install + EA profile state).
       # Same PV that will back this in Kubernetes.
       - mt5-vantage:/opt/mt5/
-      # EAs/scripts (bind-mount optional; also baked into the image)
-      - ./mql5:/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/
+      # Shared repo MQL5 tree (one tree for both modes)
+      - ../mql5:/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/
       - ./Metatrader/startup.ini:/opt/mt5/drive_c/Program Files/MetaTrader 5/startup.ini
     shm_size: '256m'
     deploy:

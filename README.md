@@ -9,6 +9,7 @@ the kustomize + kind deployment that runs them on a single-node local cluster.
 
 ```
 .
+├── mql5/         # the one MQL5 tree, mounted by BOTH modes
 ├── dev/          # interactive mode: KasmVNC UI + mt5linux API
 ├── prod/         # headless mode: mt5linux API only, minimal image
 ├── deploy/       # kustomize base + kind-dev / kind-prod overlays
@@ -20,17 +21,19 @@ the kustomize + kind deployment that runs them on a single-node local cluster.
 | `dev/` | `gmag11/metatrader5_vnc` (~8.8 GB) | KasmVNC on `:3000` | `:8001` | `HEADLESS=false`, `mt5linux==1.0.11` pin, `xdotool` login fallback |
 | `prod/` | `tobix/wine:stable` (~0.8 GB base) | none — `Xvfb :99` | `:8001` | `HEADLESS=true`, no xdotool, lower resource requests/limits |
 
-Both modes ship the same MQL5 layout (`mql5/Include` plus the authored
-`mql5/Experts/TestAutoStartEA.{mq5,ex5}`) and auto-start the EA the same way:
+Both modes mount the **same** `mql5/` tree (k8s hostPath, compose bind mount);
+neither image bakes MQL5 in. It holds `mql5/Include`, the authored
+`mql5/Experts/TestAutoStartEA.{mq5,ex5}` and `mql5/Profiles`, and both modes
+auto-start the EA the same way:
 `start.sh` writes `startup.ini` (`[StartUp] Expert / Symbol / Period`) before
 every MT5 launch, and MT5 attaches the EA on boot. `MT5_AUTO_START_EA`,
 `MT5_AUTO_START_SYMBOL` and `MT5_AUTO_START_PERIOD` select it at runtime, so no
 rebuild is needed to point at a different EA, symbol or timeframe.
 
-### MQL5 trees need `git add -f`
+### MQL5 needs `git add -f`
 
-`dev/mql5` and `prod/mql5` each carry their own `.gitignore` (`*`, `*/`,
-`!.gitignore`), so any MQL5 file has to be added with `git add -f`.
+`mql5/` carries the stock MT5 `.gitignore` (`*`, `*/`, `!.gitignore`), so any
+MQL5 file has to be added with `git add -f`.
 `MQL5/Profiles` is tracked deliberately: `startup.ini`'s `[StartUp] Expert`
 attaches to the default chart profile, so without it MT5 boots but never loads
 the expert.
@@ -38,7 +41,7 @@ the expert.
 ## Deployment
 
 `deploy/` is one `Deployment/mt5` in namespace `mt5` with two overlays that
-differ only in image, `HEADLESS`, resources and the MQL5 host path:
+differ only in image, `HEADLESS` and resources; both mount the same MQL5 tree:
 
 * `deploy/base/` — namespace, ConfigMap `mt5-env`, Deployment, Service
   (ClusterIP, VNC 3000 + mt5linux 8001), `secretGenerator` from

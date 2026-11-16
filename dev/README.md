@@ -14,7 +14,7 @@ MetaTrader 5 Docker container with support for both development (VNC) and produc
 - **Comprehensive Log Monitoring**: Streams EA, System, Trading, Tester, and Indicator logs to container stdout
 - **EA Auto-Start (working)**: `startup.ini` (`Expert`/`Symbol`/`Period`) is written by `start.sh` before every MT5 launch into both the AppData terminal dir and the portable-mode install root, then bind-mounted from the host. MT5 build 6090 reads it and attaches the EA to a chart on boot — verified across restarts/rebuilds (see TROUBLESHOOT §3). Setup guide: [docs/INSTALL.md](docs/INSTALL.md)
 - **All Logs on STDOUT**: `init-mt5` runs as an s6 longrun service and execs `start.sh` in the foreground — every log (install, launch, mt5linux, monitor) appears in `podman logs -f mt5_app`
-- **MQL5 Volume**: `./mql5` bind mount → `/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/` (EAs, indicators, scripts)
+- **MQL5 Volume**: `../mql5` (shared repo tree) bind mount → `/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/` (EAs, indicators, scripts)
 - **Wine Prefix Volume**: `mt5-vantage` named volume → `/opt/mt5/` (persists the entire Wine prefix — MT5 install, profile, session — across rebuilds)
 - **MT5 LiveUpdate Blocked**: `update.mql5.com` / `updates.mql5.com` → `127.0.0.1` via compose `extra_hosts` + a `start.sh` fallback
 
@@ -51,7 +51,7 @@ MetaTrader 5 Docker container with support for both development (VNC) and produc
 | Host Path | Container Path | Purpose |
 |-----------|---------------|---------|
 | `mt5-vantage` (compose: `mt5-dev_mt5-vantage`) | `/opt/mt5/` | Entire Wine prefix — MT5 install, profile, session, logs persist across rebuilds |
-| `./mql5` (bind mount) | `/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/` | Expert Advisors, indicators, scripts (portable-mode EA logs) |
+| `../mql5` (bind mount, shared with prod) | `/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/` | Expert Advisors, indicators, scripts (portable-mode EA logs) |
 | `./Metatrader/startup.ini` (bind mount) | `/opt/mt5/drive_c/Program Files/MetaTrader 5/startup.ini` | Host-controlled EA auto-start config; MT5 consumes it once at startup, `start.sh` rewrites it before every launch |
 
 > `mt5-vantage-session` is declared in `docker-compose.yml` but not currently mounted; session data persists inside the `mt5-vantage` prefix volume.
@@ -103,7 +103,7 @@ MT5 is launched by a custom s6 service (`/etc/s6-overlay/s6-rc.d/init-mt5`) that
 | `[TESTER:filename.log]` | Strategy tester logs |
 
 MT5 runs in **portable mode**, so EA logs are written to the install dir
-`/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/logs` (host `mql5/logs/`) rather than
+`/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/logs` (host `../mql5/logs/`) rather than
 `AppData/Roaming/MetaQuotes/Terminal`. The monitor watches both locations.
 
 Two encoding pitfalls are handled by the monitor:
@@ -181,7 +181,7 @@ Some Wine Python packages (mt5linux, rpyc) hang during pip download due to Wine 
 
 MT5 (wine) runs as the container's root user instead of the non-root `abc` user. This is intentional and required for **rootless Podman**:
 
-- Container root maps to the host user (e.g. `wasan`, uid 1000), which is the owner of the bind-mounted `./mql5` — so MT5 can write/compile EAs. The `abc` user (uid 911) maps to a subuid and *cannot* write to the host bind mount.
+- Container root maps to the host user (e.g. `wasan`, uid 1000), which is the owner of the bind-mounted `../mql5` — so MT5 can write/compile EAs. The `abc` user (uid 911) maps to a subuid and *cannot* write to the host bind mount.
 - The Wine prefix is built as root during image build (registry points to `C:\users\root`), so wine-as-root matches ownership exactly — no `chown` gymnastics, no user-namespace permission traps.
 - KasmVNC runs with `-SecurityTypes None` and `/tmp/.X11-unix` is world-writable, so the root MT5 window renders normally in the browser.
 

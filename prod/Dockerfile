@@ -40,16 +40,14 @@ RUN mkdir -p "$WINEPREFIX" && \
 RUN printf '127.0.0.1 update.mql5.com\n127.0.0.1 updates.mql5.com\n' >> /etc/hosts
 
 # ---------------------------------------------------------------------------
-# Copy scripts (verified working in dev) + MQL5 (EAs/services shipped in image)
+# Copy scripts (verified working in dev). The MQL5 tree is NOT baked in: both
+# modes mount the repo's single mql5/ tree at runtime (k8s hostPath, compose
+# bind mount), so the image stays mode-agnostic.
 # ---------------------------------------------------------------------------
 COPY Metatrader/headless.sh /Metatrader/headless.sh
 COPY Metatrader/start.sh /Metatrader/start.sh
 COPY Metatrader/monitor-mt5-logs.sh /Metatrader/monitor-mt5-logs.sh
 COPY Metatrader/log-retention.sh /Metatrader/log-retention.sh
-COPY mql5/ /tmp/mql5/
-RUN mkdir -p "/opt/mt5/drive_c/Program Files/MetaTrader 5" && \
-    cp -a /tmp/mql5/. "/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/" && \
-    rm -rf /tmp/mql5
 
 RUN chmod +x /Metatrader/headless.sh /Metatrader/start.sh /Metatrader/monitor-mt5-logs.sh /Metatrader/log-retention.sh
 

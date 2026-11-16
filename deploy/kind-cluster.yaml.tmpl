@@ -9,10 +9,9 @@
 #   8001 (host)  -> 30801 (node) : mt5linux API (both modes)
 #
 # extraMounts: the node is the only place a hostPath PV can point at, so the
-# three host trees are mounted there under fixed paths:
-#   @DATA_DIR@                     -> /var/lib/mt5            (Wine prefix, MUST be ext4)
-#   @REPO_ROOT@/dev/mql5           -> /var/lib/mt5/dev-mql5  (dev MQL5 tree)
-#   @REPO_ROOT@/prod/mql5          -> /var/lib/mt5/prod-mql5 (prod MQL5 tree)
+# two host trees are mounted there under fixed paths:
+#   @DATA_DIR@            -> /var/lib/mt5        (Wine prefix, MUST be ext4)
+#   @REPO_ROOT@/mql5      -> /var/lib/mt5/mql5   (shared MQL5 tree, both modes)
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: mt5
@@ -28,7 +27,5 @@ nodes:
     extraMounts:
       - hostPath: @DATA_DIR@
         containerPath: /var/lib/mt5
-      - hostPath: @REPO_ROOT@/dev/mql5
-        containerPath: /var/lib/mt5/dev-mql5
-      - hostPath: @REPO_ROOT@/prod/mql5
-        containerPath: /var/lib/mt5/prod-mql5
+      - hostPath: @REPO_ROOT@/mql5
+        containerPath: /var/lib/mt5/mql5

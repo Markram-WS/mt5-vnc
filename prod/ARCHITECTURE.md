@@ -15,7 +15,7 @@ Two deployments, both running the **same MetaTrader 5** install and EA:
 | GUI / VNC | yes, port **3000** (KasmVNC) | **none** — headless (Xvfb only) |
 | Display | interactive (VNC) | `Xvfb :99` virtual framebuffer |
 | GUI tooling | xdotool present (used for login) | **no xdotool** (removed) |
-| MQL5 shipped | full MT5 examples (~107MB) | only EA(s) in use (~9MB) |
+| MQL5 source | full `mql5/` example tree (~107MB) | same shared `mql5/` tree (nothing baked) |
 | Purpose | author / configure / test | replicate, run headless, deploy (K8s) |
 
 Both auto-start the EA via **`startup.ini`**, not GUI dragging. `prod/` replicates
@@ -115,17 +115,18 @@ prod/
 ├── .env / .env.example         # runtime config (dynamic)
 ├── README.md
 ├── ARCHITECTURE.md             # (this)
-├── Metatrader/
-│   ├── headless.sh             # Xvfb + passes to start.sh
-│   ├── start.sh                # install/launch + EA auto-start + API
-│   ├── monitor-mt5-logs.sh     # tail → [EA:..][SYSTEM:..] on stdout
-│   └── startup.ini             # EA/Symbol/Period            (bind-mounted)
-└── mql5/                       # bind-mounted → /opt/mt5/.../MQL5/
-    ├── Experts/TestAutoStartEA.{mq5,ex5}   # only the EA in use
-    ├── Profiles/                # chart/template/symbolset state
-    ├── experts.dat              # MT5 internal index
-    ├── logs/                    # MT5/EA UTF-16 logs
-    └── Metatrader/monitor-mt5-logs.sh
+└── Metatrader/
+    ├── headless.sh             # Xvfb + passes to start.sh
+    ├── start.sh                # install/launch + EA auto-start + API
+    ├── monitor-mt5-logs.sh     # tail → [EA:..][SYSTEM:..] on stdout
+    └── startup.ini             # EA/Symbol/Period            (bind-mounted)
+
+../mql5/                       # repo-root tree, bind-mounted → /opt/mt5/.../MQL5/
+├── Experts/TestAutoStartEA.{mq5,ex5}
+├── Profiles/                  # chart/template/symbolset state
+├── Include/ Scripts/ Services/
+├── experts.dat                # MT5 internal index
+└── logs/                      # MT5/EA UTF-16 logs
 ```
 
 ---
@@ -133,8 +134,8 @@ prod/
 ## 5. Mounts (bind mounts)
 
 | Host path | Container path | Note |
-|---|---|---|---|
-| `./mql5` | `…/MetaTrader 5/MQL5/` | MQL5 tree — bind mount over volume |
+|---|---|---|
+| `../mql5` | `…/MetaTrader 5/MQL5/` | shared MQL5 tree — bind mount over volume |
 | `./Metatrader/startup.ini` | `…/MetaTrader 5/startup.ini` | one-shot boot file |
 | external volume `mt5-vantage` | `/opt/mt5/` | the whole Wine prefix |
 
@@ -182,8 +183,8 @@ activity without exec-ing in.
 
 - base `tobix/wine:stable` ≈ **2.5GB**
 - + Linux deps (python3, mt5linux; xdotool **removed**) — small
-- + mql5 ~9MB only
-- Final local image ≈ **2.8GB** (vs dev ~8.8GB) — leaner; further reduction is limited
+- + no MQL5 baked in (the shared `../mql5/` tree is mounted at runtime)
+- Final local image ≈ **2.7GB** (vs dev ~8.8GB) — leaner; further reduction is limited
   by the Wine base itself.
 
 ---
@@ -192,4 +193,4 @@ activity without exec-ing in.
 
 - The shared volume `mt5-vantage` already models the k8s PV.
 - Instance → pod; ConfigMap/Secret injections replace `.env`.
-- MinIO later serves MQL5 archive instead of host copy (still plain copy).
+- MinIO later serves the MQL5 archive instead of the local hostPath/bind mount.

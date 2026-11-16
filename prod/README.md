@@ -1,9 +1,10 @@
 # MT5 Production (Headless)
 
 Production **headless** MetaTrader 5 container. Same EA auto-start mechanism as
-`dev/`, but no GUI and much lighter (`~2.7GB` vs dev VNC `~8.8GB`, and MQL5 shipped
-is only the EA(s) in use, ~9MB). Configuration is fully dynamic via `.env` — no
-rebuild needed for setting a different EA / symbol / timeframe.
+`dev/`, but no GUI and much lighter (`~2.7GB` vs dev VNC `~8.8GB`), and no MQL5
+baked into the image at all — both modes mount the repo's single `mql5/` tree.
+Configuration is fully dynamic via `.env` — no rebuild needed for setting a
+different EA / symbol / timeframe.
 
 ---
 
@@ -15,15 +16,14 @@ rebuild needed for setting a different EA / symbol / timeframe.
 | GUI | VNC port 3000 | none (headless, no `xdotool`) |
 | mt5linux API | port 8001 | port 8001 (host 8002) |
 | EA auto-start | `startup.ini` written by `start.sh` | same as dev |
-| MQL5 shipped | full MT5 examples | only the EA(s) in use (~9MB) |
+| MQL5 source | shared `../mql5/` bind mount | same tree |
 | Shared volume | `mt5-vantage` | same (external: `mt5-dev_mt5-vantage`) |
 
 > Both dev and prod auto-start the EA the same way: `start.sh` writes `startup.ini`
 > (`[StartUp] Expert / Symbol / Period`) before every MT5 launch, and MT5 reads it and
-> attaches the EA itself — no dragging in a GUI. `prod/` is **trimmed to the
-> essentials**: only the configured EA(s) under `mql5/Experts/` (default MT5
-> `Include/Indicators/Scripts/Examples` are **removed** to keep the image minimal —
-> this image is **GUI-free**). Behavior matches dev for the EAs you ship.
+> attaches the EA itself — no dragging in a GUI. Both modes see the same `mql5/`
+> tree, so the EA you test in dev is byte-for-byte the EA prod attaches. The
+> difference is only the runtime: this image is **GUI-free**.
 >
 > `prod/` is a **GUI-free** image: `xdotool` and the VNC/desktop stack are **not
 > installed**. Because the login state persists in the shared volume (seeded once from
@@ -76,55 +76,23 @@ On Kubernetes the same variables go to a **ConfigMap** (`MT5_AUTO_START_*`,
 
 ---
 
-## 3. Copying from dev → prod
+## 3. MQL5 tree (shared, no copying)
 
-Production uses a **plain copy** (no sync). `prod/mql5` is **bind-mounted** into the
-container (`docker-compose.yml:45`), so copying files from `dev/` → `prod/` and
-restarting the container applies them — for EAs/indicators no image rebuild needed.
+There is **one** MQL5 tree in the repo — `../mql5/` at the repository root — and
+prod mounts it at `/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/`
+(`docker-compose.yml`). Dev mounts the same directory, and the k8s overlays
+bind the same hostPath. Nothing is copied between modes any more, and no image
+bakes MQL5 in.
 
-> **Prod ships only what it runs.** Unlike dev, prod's `mql5/` keeps just the EA(s)
-> configured in `.env`; the default MT5 `Examples/`, `Include/`, `Indicators/`,
-> `Scripts/`, `Advisors/`, `Free Robots/` example trees are deleted to keep the image
-> lean (~9MB vs dev ~107MB). When copying a new EA, copy **only** that EA — do not
-> `rsync --delete` the whole dev tree or you'll drag all the examples back in.
-
-### 3a. Copy everything from dev (fresh EA / full re-sync)
+So dropping a new EA into `../mql5/Experts/` and restarting the container is
+the whole workflow:
 
 ```bash
-cd /media/wasan/Storage/mt5-dev
-# whole MQL5 tree (Experts, Include, Indicators, Scripts, Services, Profiles, Images, logs)
-rsync -a --delete dev/mql5/ prod/mql5/
-
-# dev's MT5 runner scripts (only needed when start.sh/headless.sh change)
-rsync -a dev/Metatrader/   prod/Metatrader/
-# ensure the monitor matches the one dev bakes under mql5/Metatrader
-cp -f dev/mql5/Metatrader/monitor-mt5-logs.sh prod/Metatrader/monitor-mt5-logs.sh
-
-# fresh-sync copies ALL of dev (incl. examples). If you only want one EA, skip
-# this block and use 3b instead.
+cp MyRobot.ex5 MyRobot.mq5 ../mql5/Experts/
 DOCKER_HOST=unix:///run/user/1000/podman/podman.sock docker-compose restart
 ```
 
-> The `--delete` full sync makes prod = dev *exactly*, which brings back the example
-> bloat. Prefer **3b** below (copy only what you use) for everyday EA updates.
-
-### 3b. Copy only the EAs / files you actually use (recommended)
-
-```bash
-# copy just one EA's compiled + source files (they go to mql5/Experts/)
-cp ../dev/mql5/Experts/MyRobot.ex5 ./mql5/Experts/
-cp ../dev/mql5/Experts/MyRobot.mq5 ./mql5/Experts/   # optional: for future recompile
-
-# if the EA needs includes/indicators, copy only those deps, e.g.:
-# rsync -a ../dev/mql5/Include/mydep.mqh  ./mql5/Include/
-
-DOCKER_HOST=... docker-compose restart   # pick up the bind-mounted volume
-```
-
-> `dev/mql5` and `prod/mql5` are separate trees; copying is a manual `cp`/`rsync` —
-> no automatic sync. Prod only carries what it runs — keep it that way.
-
-Path mapping (host `prod/mql5` → wine container):
+Path mapping (host `../mql5` → wine container):
 
 | Host | Wine (container) |
 |---|---|
@@ -133,6 +101,10 @@ Path mapping (host `prod/mql5` → wine container):
 | `mql5/Indicators/` | `.../MQL5/Indicators/` |
 | `mql5/Scripts/` | `.../MQL5/Scripts/` |
 | `mql5/Profiles/` | `.../MQL5/Profiles/` |
+
+> The tree needs `git add -f` (it carries the stock MT5 `.gitignore`), and it
+> holds `Profiles` deliberately: `startup.ini`'s `[StartUp] Expert` attaches to
+> the saved default chart, so a tree without it boots MT5 but never loads the EA.
 
 ### Login / session state
 
@@ -148,8 +120,8 @@ One EA per container (per `startup.ini` limitation). To run several EAs, run sev
 container instances (fits the K8s one-PV-one-instance model).
 
 ```bash
-# 1) drop the compiled .ex5 (with its .mq5 source) into prod/mql5/Experts/
-cp dev/mql5/Experts/MyRobot.ex5 ./mql5/Experts/
+# 1) drop the compiled .ex5 (with its .mq5 source) into ../mql5/Experts/
+cp MyRobot.ex5 MyRobot.mq5 ../mql5/Experts/
 
 # 2) set config in .env (dynamic — no rebuild; restart for the bind-mount)
 MT5_AUTO_START_EA=MyRobot        # no ".ex5" suffix; subfolders ok e.g. "Sub/MyRobot"
@@ -254,5 +226,5 @@ configure host `journald.conf` (`SystemMaxUse`) / rely on journald rotation.
 - Env (`MT5_AUTO_START_*`, `ENABLE_MT5LINUX_API`) → **ConfigMap**
 - Credentials (`MT5_ACCOUNT/PASSWORD/SERVER`) → **Secret**
 - `MT5_AUTO_START_*` set via **Helm / Kustomization**
-- MQL5 / data served from **MinIO** (future) — the local build above is a normal copy,
-  no sync.
+- MQL5 / data served from **MinIO** (future) — today the single repo `mql5/`
+  tree is bind-mounted/hostPath-mounted, no copying or syncing anywhere.
