@@ -427,15 +427,40 @@ entrypoint and the lean resources are identical to any other prod render; only
 image, storage, secret source and Service ports are cluster-specific.
 
 **It has not been applied.** Everything below is the procedure for the first
-apply.
+apply; these pieces already exist:
+
+* the image `markram92/mt5-prod:1.0.0` is **pushed to Docker Hub** — 916 MB
+  compressed, digest
+  `sha256:bb489cd3c6cd4ec8f9925a2027fb5ac114c1625d0b3149e1edbb31295f56cb1a`,
+  pushed 2026-11-16;
+* the one-time login-profile copy to MinIO (bucket `mt5`, prefix `prod-demo`)
+  is **done**;
+* everything else — the Vault keys, the apply itself and the Flux registration —
+  is still outstanding.
+
+Preconditions for the first apply, in order:
+
+1. Vault `secret/mt5` exists with `MINIO_ACCESS_KEY` and `MINIO_SECRET_KEY`
+   (otherwise the `ExternalSecret` fails and the pod never starts) — see
+   "Vault: write the MinIO keys".
+2. `prod-demo/` is present in bucket `mt5` (already done) — see "Copying the
+   login profile to MinIO".
+3. The dev pod is **stopped**: both environments log in to the same demo
+   account (`26435893` on `VantageMarkets-Demo`), so never run dev and prod
+   concurrently.
+4. Then `kubectl --context admin@homelab-cluster apply -k deploy/overlays/talos`
+   ("Apply"), or the Flux path ("Flux alternative").
 
 ### 1. Registry: build and push the image
 
 The overlay pins `markram92/mt5-prod:1.0.0` (Docker Hub), so the image has to
-exist in the registry before the pod can start:
+exist in the registry before the pod can start. Tag `1.0.0` is already pushed
+(916 MB compressed, digest
+`sha256:bb489cd3c6cd4ec8f9925a2027fb5ac114c1625d0b3149e1edbb31295f56cb1a`,
+pushed 2026-11-16), so re-run this only for a rebuild or a new tag:
 
 ```bash
-podman login docker.io                 # once; the auth store has no docker.io entry yet
+podman login docker.io                 # once per login session (see auth store note)
 ./scripts/push-image.sh                # builds prod/ and pushes tag 1.0.0
 ./scripts/push-image.sh 1.0.1         # explicit tag (edit the overlay's newTag to match)
 ./scripts/push-image.sh 1.0.0 --build-only   # build + tag locally, no push, no auth needed
@@ -443,11 +468,20 @@ podman login docker.io                 # once; the auth store has no docker.io e
 
 `push-image.sh` stages the build context under `$TMPDIR` (this checkout is on
 exFAT, where buildah cannot mount its overlay), tags `markram92/mt5-prod:<tag>`
-and pushes. It refuses with a non-zero exit **before** building when
-`~/.config/containers/auth.json` is missing or holds no `docker.io` entry, and
-it never prints credentials — it only inspects the registry key names in the
-auth store. A pushed tag has to match the overlay's `newTag`; re-pushing an
-existing tag does not update a running pod (the Deployment is
+and pushes. It looks for the podman login store in **podman's own order** —
+`$REGISTRY_AUTH_FILE` if set, else
+`$XDG_RUNTIME_DIR/containers/auth.json` (usually
+`/run/user/<uid>/containers/auth.json`), else `~/.config/containers/auth.json` —
+and refuses with a non-zero exit **before** building when none of those exists
+or the one it found holds no `docker.io` entry; the message names the paths it
+searched. Only `~/.config` used to be checked, which produced a false "not
+logged in" on hosts where `podman login` had written the runtime-dir store.
+
+The runtime-dir store is per-login-session state: it **disappears on logout or
+reboot**, so after either, `podman login docker.io` has to be run again before
+a push. The script never prints credentials — it only inspects the registry key
+names in the auth store. A pushed tag has to match the overlay's `newTag`;
+re-pushing an existing tag does not update a running pod (the Deployment is
 `imagePullPolicy: IfNotPresent`), so use a new tag or `kubectl rollout restart`.
 
 ### 2. Vault: write the MinIO keys

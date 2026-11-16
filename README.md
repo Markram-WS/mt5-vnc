@@ -102,11 +102,25 @@ and the re-seed procedure for a password rotation are in
 Prod runs on the homelab Talos cluster as `deploy/overlays/talos` (Docker Hub
 image `markram92/mt5-prod:1.0.0`, `fetch-profile` against the in-cluster MinIO
 Service, Vault-backed `mt5-minio` credentials via `ExternalSecret`,
-`local-path` PVC, API on NodePort `30801`) and is **not applied yet**. The
-registry push (`podman login docker.io` then `./scripts/push-image.sh <tag>`),
-the two Vault properties under `secret/mt5` (`MINIO_ACCESS_KEY`,
-`MINIO_SECRET_KEY`), the manual apply and the Flux registration are all
-documented in
+`local-path` PVC, API on NodePort `30801`) and is **not applied yet**.
+
+The image itself is already published: `markram92/mt5-prod:1.0.0`, 916 MB
+compressed, digest
+`sha256:bb489cd3c6cd4ec8f9925a2027fb5ac114c1625d0b3149e1edbb31295f56cb1a`,
+pushed 2026-11-16. A rebuild is pushed with `./scripts/push-image.sh <tag>`
+after `podman login docker.io`: the script reads the login store in podman's
+order — `$REGISTRY_AUTH_FILE`, else
+`$XDG_RUNTIME_DIR/containers/auth.json` (usually
+`/run/user/<uid>/containers/auth.json`), else `~/.config/containers/auth.json` —
+and the runtime-dir store is per-session, so it vanishes on logout/reboot and
+the login has to be repeated (credentials are never printed).
+
+Outstanding before the first apply: the two Vault properties under `secret/mt5`
+(`MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`), then
+`kubectl --context admin@homelab-cluster apply -k deploy/overlays/talos` (or the
+Flux registration). The one-time login-profile copy to MinIO (`mt5/prod-demo/`)
+is already done, and because dev and prod use the **same demo account** the dev
+pod must be stopped while prod runs. The manual apply and Flux steps are in
 [deploy/README.md](deploy/README.md#talos-prod-overlay).
 
 ### MQL5 delivery and release
