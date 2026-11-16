@@ -1,8 +1,9 @@
 # Troubleshooting - MT5 Dev Environment
 
-Common issues, root causes, and fixes for the MT5 container (`mt5_app`).
+Common issues, root causes, and fixes for the MT5 dev pod (`mt5` in namespace `mt5`,
+run with `./scripts/kind-up.sh --mode dev`).
 
-## 1. EA logs not appearing in `podman logs mt5_app`
+## 1. EA logs not appearing in `kubectl -n mt5 logs deploy/mt5`
 
 **Symptom:** The EA is running (attached to a chart) but no `[EA:...]` lines show up in
 container stdout, even though MT5 writes log lines continuously.
@@ -10,17 +11,17 @@ container stdout, even though MT5 writes log lines continuously.
 ### Root cause
 - MT5 runs in **portable mode**, so EA logs land in the install dir
   `<WINEPREFIX>/drive_c/Program Files/MetaTrader 5/MQL5/logs`
-  (host `mql5/logs/`), **not** in `AppData/Roaming/MetaQuotes/Terminal` (that dir has no
-  `MQL5/Logs`).
+  (the pod's `emptyDir`, filled from git), **not** in
+  `AppData/Roaming/MetaQuotes/Terminal` (that dir has no `MQL5/Logs`).
 - MT5 log files are **UTF-16LE**. `tail -F` splits lines on byte `0x0A`, but the UTF-16
   newline is `0A 00`, so after `tail` the stream is misaligned by one byte. Feeding that to
   `iconv` mangles every line (mojibake).
 - `tr` block-buffers its pipe output (~4 KB), delaying EA ticks by tens of seconds.
 
-### Fix (in `mql5/Metatrader/monitor-mt5-logs.sh`)
+### Fix (in `Metatrader/monitor-mt5-logs.sh`)
 - Watch the install `MQL5` dir **and** the AppData terminal dir.
-- Match log dirs **case-insensitively** (`find -ipath`) because the exFAT host mount does
-  not preserve case (dir appears as lowercase `logs`).
+- Match log dirs **case-insensitively** (`find -ipath`) because the emptyDir may hold a
+  copied-in tree whose casing is not guaranteed.
 - Decode log lines by **stripping NUL bytes** (`tr -d '\000'`) instead of `iconv`, with
   `stdbuf -oL` to force line buffering:
   ```bash
@@ -39,14 +40,15 @@ container stdout, even though MT5 writes log lines continuously.
 
 ### Verification
 ```bash
-podman logs -f mt5_app   # expect [EA:20260805.log] ... TestAutoStartEA ... OnTick ...
+kubectl -n mt5 logs -f deploy/mt5   # expect [EA:…] ... TestAutoStartEA ... OnTick ...
 ```
 
-## 2. MT5 never launched on an existing volume (empty VNC / no MT5 window)
+## 2. MT5 never launched on an existing prefix (empty VNC / no MT5 window)
 
-**Symptom:** On a container/recreate **with a pre-existing `mt5-vantage` volume**, the VNC
-UI (`http://localhost:3000/`) loads but the MetaTrader window never appears. `podman logs`
-shows `[7/7] Auto-start EA configured ...` but **no** `[7/7] Launching MT5...`.
+**Symptom:** On a pod recreate **with a pre-existing `mt5-prefix` PVC**, the VNC
+UI (`http://localhost:3000/`) loads but the MetaTrader window never appears.
+`kubectl -n mt5 logs deploy/mt5` shows `[7/7] Auto-start EA configured ...` but
+**no** `[7/7] Launching MT5...`.
 
 ### Root cause
 - The EA auto-start refactor only called `launch_mt5()` from inside
@@ -62,8 +64,12 @@ shows `[7/7] Auto-start EA configured ...` but **no** `[7/7] Launching MT5...`.
       launch_mt5
   fi
   ```
-- Apply live without a rebuild: `podman cp Metatrader/start.sh mt5_app:/Metatrader/start.sh`
-  then kill the `start.sh` PID so s6 (longrun) restarts it (`podman exec mt5_app kill -9 <pid>`).
+- Apply live without a rebuild: copy the script into the running pod and let the s6
+  longrun restart it:
+  ```bash
+  kubectl -n mt5 cp Metatrader/start.sh mt5-<pod>:/Metatrader/start.sh
+  kubectl -n mt5 exec deploy/mt5 -- pkill -9 -f /Metatrader/start.sh
+  ```
 
 ## 3. EA auto-start — what works (verified 2026-08-06, build 6090)
 
@@ -78,9 +84,9 @@ the EA attaches to a chart **automatically** — the terminal log shows
   - the AppData terminal dir `<Terminal>/<uuid>/startup.ini`, and
   - the install root `<prefix>/drive_c/Program Files/MetaTrader 5/startup.ini`.
 - On the next launch, MT5 reads it and attaches the EA to a chart itself.
-- Key requirement: **the account must already be authorized in the volume** (login
-  persisted in `mt5-vantage`). The attach is processed once the chart loads; with a
-  pre-authorized volume this happens reliably. On a brand-new volume, the login completes
+- Key requirement: **the account must already be authorized in the prefix** (login
+  persisted in the `mt5-prefix` PVC). The attach is processed once the chart loads; with a
+  pre-authorized prefix this happens reliably. On a brand-new prefix, the login completes
   first and the EA still attaches on the same or the next boot.
 
 ### Verified sequence (2026-08-06)
@@ -112,48 +118,46 @@ Verified empirically on build 6090 under Wine:
 ## 4. Rebuilding / recreating while keeping the MT5 session
 
 ```bash
-# Rebuild the image (bakes start.sh + monitor + .dockerignore exceptions)
-podman build -t localhost/mt5-dev-mt5-node:latest .
+# Rebuild the image and re-apply the overlay, keeping the prefix PVC
+./scripts/kind-up.sh --mode dev
 
-# Recreate with the existing Persistent volume (keeps login/profile state)
-bash /tmp/opencode/run-mt5.sh   # uses -v mt5-dev_mt5-vantage:/opt/mt5/
+# Or just recreate the pod (same image, same prefix, fresh MQL5 clone)
+kubectl -n mt5 delete pod -l app.kubernetes.io/name=mt5
 ```
 
-To start clean, remove the named volume first. A fresh volume re-initializes the Wine
-prefix from the image but re-runs the MT5 login cycle.
+The prefix PVC keeps login/profile/MT5-install state; the MQL5 tree is re-cloned
+from `MQL5_GIT_REF` on every pod start. To start clean, delete the prefix data on
+the host (`~/mt5-data/prefix`); a fresh prefix re-initializes the Wine prefix from
+the image but re-runs the MT5 login cycle.
 
-## 5. No EA / silent `COPY` failure
+## 5. Monitor script missing from the image
 
-- `.dockerignore` excludes `mql5/`. The monitor is only copied into the image if the
-  negations are present:
-  ```gitignore
-  mql5/
-  !mql5/Metatrader/
-  !mql5/Metatrader/monitor-mt5-logs.sh
-  !mql5/Experts/
-  ```
+`dev/Dockerfile` copies `/Metatrader/monitor-mt5-logs.sh` from the build context
+`dev/Metatrader/`. `dev/.dockerignore` excludes `*.md`, `config/`, `Tests/` and
+`.env` — it must **not** exclude `Metatrader/`, or `start.sh` logs
+`MT5 log monitoring script not found` and no `[EA:…]` lines reach stdout.
 
-## 6. `podman logs` only shows the main service, not `podman exec` output
+## 6. `kubectl logs` only shows the main service, not `kubectl exec` output
 
 - Only output from the s6 longrun tree (e.g. `/Metatrader/start.sh` and its children)
-  reaches `podman logs`. A monitor started via `podman exec` writes to the exec session,
+  reaches `kubectl logs`. A monitor started via `kubectl exec` writes to the exec session,
   **not** to container logs.
 - To apply the monitor to a running container's stdout: kill the exec'd monitor, then
   restart the `init-mt5` service so s6 relaunches `start.sh`:
   ```bash
-  podman exec mt5_app kill -TERM <start.sh-pid>   # s6 auto-restarts it
+  kubectl -n mt5 exec deploy/mt5 -- pkill -TERM -f /Metatrader/start.sh   # s6 auto-restarts it
   ```
 
 ## Useful paths & facts
 
 | Item | Value |
 |------|-------|
-| Image | `localhost/mt5-dev-mt5-node:latest` |
-| Container | `mt5_app` (rootless podman) |
-| Real volume | `mt5-dev_mt5-vantage` (compose-prefixed) |
+| Image | `localhost/mt5-dev:dev` (loaded into kind) |
+| Pod | `kubectl -n mt5 get pods` (Deployment `mt5`, one replica) |
+| Prefix PVC | `mt5-prefix` → host `~/mt5-data/prefix` |
 | Wine prefix | `/opt/mt5` |
-| Portable EA logs | `<prefix>/drive_c/Program Files/MetaTrader 5/MQL5/logs` |
+| Portable EA logs | `<prefix>/drive_c/Program Files/MetaTrader 5/MQL5/logs` (in the pod's `emptyDir`) |
 | Terminal profile | `<prefix>/drive_c/users/root/AppData/Roaming/MetaQuotes/Terminal/<uuid>` |
 | startup.ini (kept) | `<Terminal>/<uuid>/startup.ini` |
-| startup.ini (read at startup) | `<prefix>/drive_c/Program Files/MetaTrader 5/startup.ini` (bind-mounted from `Metatrader/startup.ini`; MT5 consumes it once at startup) |
-| `podman-compose` broken | missing `dotenv`; use `docker-compose` v5.2 instead |
+| startup.ini (read at startup) | `<prefix>/drive_c/Program Files/MetaTrader 5/startup.ini` (written by `start.sh` before every launch, from `MT5_AUTO_START_*`; MT5 consumes it once) |
+| MQL5 source | git clone at `MQL5_GIT_REF` (pinned tag `mql5-v1`) into the pod's `emptyDir` |

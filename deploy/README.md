@@ -24,17 +24,20 @@ workload.
 deploy/
 ├── base/                      # environment-agnostic resources
 │   ├── namespace.yaml         # Namespace mt5
-│   ├── configmap.yaml         # mt5-env: non-secret env (mirrors compose)
+│   ├── configmap.yaml         # mt5-env: non-secret env
 │   ├── deployment.yaml        # Deployment mt5: Recreate, prefix PVC, shm, probes
 │   ├── service.yaml           # Service mt5: ClusterIP, vnc 3000 + mt5linux 8001
 │   ├── kustomization.yaml     # namespace mt5 + secretGenerator mt5-secrets
 │   └── secrets.env.example    # CUSTOM_USER/PASSWORD, MT5_SERVER/ACCOUNT/PASSWORD
+├── components/
+│   └── kind-nodeports/
+│       └── kustomization.yaml # Service NodePort 30300/30801 (shared by both modes)
 ├── overlays/
 │   ├── kind-dev/
-│   │   ├── kustomization.yaml # image :dev, NodePorts
+│   │   ├── kustomization.yaml # image :dev + components
 │   │   └── storage.yaml       # PV mt5-prefix-pv + PVC mt5-prefix
 │   └── kind-prod/
-│       ├── kustomization.yaml # image :prod, NodePorts, HEADLESS=true, lower limits
+│       ├── kustomization.yaml # image :prod, HEADLESS=true, entrypoint, lean limits
 │       └── storage.yaml
 ├── kind-cluster.yaml.tmpl     # kind Cluster (placeholders @REPO_ROOT@ / @DATA_DIR@)
 ├── registries.conf            # short-name aliases (host has no /etc/containers/registries.conf)
@@ -78,7 +81,7 @@ the PVC at `/prefix` (leaving `/opt/mt5` showing the image content) and:
 
 ```sh
 [ -f /prefix/system.reg ] && exit 0    # never touch an initialized prefix
-cp -a /opt/mt5/. /prefix/              # one-time, reproduces compose behaviour
+cp -a /opt/mt5/. /prefix/              # one-time seed from the image
 ```
 
 `cp -a` keeps symlinks and modes (Wine maps built-ins through symlinks), and the
@@ -194,10 +197,10 @@ extraMounts whose host path does not exist.
   `$MT5_DATA_DIR/prefix/.../logs/`.
 * `startup.ini` is **not** mounted: `start.sh` rewrites it from the
   `MT5_AUTO_START_*` env on every launch.
-* `/dev/shm` is a 256Mi memory-backed emptyDir (compose `shm_size: 256m`).
-* `hostAliases` maps `update.mql5.com` / `updates.mql5.com` to 127.0.0.1 (the
-  compose `extra_hosts`); k8s regenerates `/etc/hosts`, so this is the only way
-  to keep MT5 LiveUpdate blocked.
+* `/dev/shm` is a 256Mi memory-backed emptyDir.
+* `hostAliases` maps `update.mql5.com` / `updates.mql5.com` to 127.0.0.1; k8s
+  regenerates `/etc/hosts`, so this is the only way to keep MT5 LiveUpdate
+  blocked.
 
 `mql5/` carries the stock MT5 `.gitignore` (`*`, `*/`, `!.gitignore`), so MQL5
 files must be added with `git add -f`. `mql5/Profiles` is tracked deliberately:
@@ -209,8 +212,8 @@ as modified after a session (`git checkout -- mql5/Profiles` restores it).
 ## MQL5 delivery and release
 
 Pods clone `MQL5_GIT_REF` from `MQL5_GIT_URL` at start into a per-pod
-`emptyDir` (~295 files); neither the checkout nor the compose bind mounts are
-read by Kubernetes. Release a tree with: commit (including the compiled
+`emptyDir` (~295 files); the repo checkout is never read by the cluster.
+Release a tree with: commit (including the compiled
 `.ex5` — a `.mq5` edit alone never changes behavior) → `git tag -a mql5-vN` →
 `git push --tags` → update `MQL5_GIT_REF` in `deploy/base/configmap.yaml` →
 `kubectl apply -k deploy/overlays/kind-prod` (or `kind-dev`) →
@@ -254,8 +257,8 @@ a warning instead of pretending the file is private. The file is outside the
 `dev/` git repository, but do not put production credentials in an exFAT
 checkout.
 
-Non-secret configuration lives in `ConfigMap mt5-env` in `base/configmap.yaml`
-and mirrors both compose files: `VNC_RESOLUTION`, `COMPANY_ENV`,
+Non-secret configuration lives in `ConfigMap mt5-env` in `base/configmap.yaml`:
+`MQL5_GIT_URL`/`MQL5_GIT_REF`, `VNC_RESOLUTION`, `COMPANY_ENV`,
 `COMPANY_REGION`, `MT5_BROKER_SERVER`, `MT5_BROKER_PORT`,
 `ENABLE_MT5LINUX_API`, `MT5_AUTO_START_EA/SYMBOL/PERIOD`,
 `LOG_RETENTION_DAYS`, `LOG_RETENTION_INTERVAL`, `HEADLESS`, `WINEPREFIX`,
@@ -270,7 +273,7 @@ and mirrors both compose files: `VNC_RESOLUTION`, `COMPANY_ENV`,
   echoes the server and account. Anyone who can `exec` into the pod or read its
   logs can read them: restrict `pods/exec` and `pods/log` RBAC (and local
   `kubectl` access to the cluster) accordingly. This is inherited from
-  `start.sh`/compose, not introduced by the manifests.
+  `start.sh`, not introduced by the manifests.
 * **`deploy/base/secrets.env` sits on exFAT**, where `chmod 600` is a no-op, so
   the file is readable by any local user who can read the checkout. `kind-up.sh`
   verifies the mode and warns instead of implying the file is private; keep real

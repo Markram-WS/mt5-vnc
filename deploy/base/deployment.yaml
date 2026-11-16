@@ -31,24 +31,23 @@ spec:
         app.kubernetes.io/name: mt5
         app.kubernetes.io/part-of: mt5
     spec:
-      # compose used extra_hosts; k8s regenerates /etc/hosts, so hostAliases is
-      # the only way to keep MT5 LiveUpdate blocked (start.sh re-checks and
-      # appends at runtime too, but /etc/hosts is root-owned in some images).
+      # k8s regenerates /etc/hosts, so hostAliases is the only way to keep MT5
+      # LiveUpdate blocked (start.sh re-checks and appends at runtime too, but
+      # /etc/hosts is root-owned in some images).
       hostAliases:
         - ip: 127.0.0.1
           hostnames:
             - update.mql5.com
             - updates.mql5.com
       # The PVC mounts at /opt/mt5 and therefore HIDES the Wine prefix that both
-      # images bake into that path during build. Docker's named volume used to
-      # copy the image content into the empty volume on first mount; a
-      # Kubernetes hostPath PV is just an empty directory. Without seeding,
-      # start.sh finds no system.reg, runs `wineboot`, and wineboot pops the
-      # INTERACTIVE "install Wine Mono" dialog (control.exe appwiz.cpl
-      # install_mono) and blocks forever — fatal in headless prod.
+      # images bake into that path during build. A Kubernetes hostPath PV is
+      # just an empty directory. Without seeding, start.sh finds no system.reg,
+      # runs `wineboot`, and wineboot pops the INTERACTIVE "install Wine Mono"
+      # dialog (control.exe appwiz.cpl install_mono) and blocks forever — fatal
+      # in headless prod.
       # This init container sees the PVC at /prefix (so /opt/mt5 still shows the
-      # image content) and copies it once, which reproduces the compose
-      # behaviour and keeps every registry path valid (same /opt/mt5 target).
+      # image content) and copies it once, which keeps every registry path valid
+      # (same /opt/mt5 target).
       initContainers:
         # MQL5 comes from git, not from the node and not from the image:
         # clone the repo at MQL5_GIT_REF and copy mql5/ into the emptyDir the
@@ -168,11 +167,11 @@ spec:
           volumeMounts:
             - name: prefix
               mountPath: /opt/mt5
-            # Mirrors the compose bind mount: hides the MQL5 tree baked into
-            # the image and serves the mode's host tree instead.
+            # The MQL5 tree is served from the pod's emptyDir (cloned from git
+            # by fetch-mql5), never from the node's filesystem.
             - name: mql5
               mountPath: /opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5
-            # compose: shm_size 256m
+            # 256Mi shared memory for Wine.
             - name: shm
               mountPath: /dev/shm
       volumes:

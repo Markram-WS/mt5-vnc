@@ -11,29 +11,31 @@ Two deployments, both running the **same MetaTrader 5** install and EA:
 
 | | **dev** | **prod (this)** |
 |---|---|---|
-| Base image | `gmag11/metatrader5_vnc` (~8.8GB) | `tobix/wine:stable` (~2.5GB) |
+| Base image | `gmag11/metatrader5_vnc` (~8.8GB) | `tobix/wine:stable` (~2.7GB) |
 | GUI / VNC | yes, port **3000** (KasmVNC) | **none** — headless (Xvfb only) |
 | Display | interactive (VNC) | `Xvfb :99` virtual framebuffer |
 | GUI tooling | xdotool present (used for login) | **no xdotool** (removed) |
-| MQL5 source | full `mql5/` example tree (~107MB) | same shared `mql5/` tree (nothing baked) |
-| Purpose | author / configure / test | replicate, run headless, deploy (K8s) |
+| MQL5 source | cloned from git at `MQL5_GIT_REF` | same tree, same ref (nothing baked) |
+| Purpose | author / configure / test | replicate, run headless, deploy |
 
 Both auto-start the EA via **`startup.ini`**, not GUI dragging. `prod/` replicates
 dev's **behavior** with a thin, headless, minimal image.
 
 ```
-            ┌────────────────────────────┐
-            │        host (podman)       │
-            └─────────────┬──────────────┘
-                          │ DOCKER_HOST=unix:///run/user/1000/podman/podman.sock
-              ┌───────────┴───────────┐
-              │  mt5_prod container    │
-              │  (tobix/wine base)     │
-              └───────────┬───────────┘
+            ┌──────────────────────────────────┐
+            │  kind node (mt5-control-plane)   │
+            │  hostPort 8001 → nodePort 30801  │
+            └─────────────┬────────────────────┘
+                          │
+              ┌───────────┴────────────┐
+              │  pod mt5 (1 replica)    │
+              │  localhost/mt5-prod:prod│
+              │  init: fetch-mql5 →     │
+              │        emptyDir /mql5   │
+              └───────────┬────────────┘
                           │
         ┌─────────────────┴──────────────────┐
-        │  shared volume  mt5-vantage         │
-        │  = dev's volume  (mt5-dev_mt5-vantage)│
+        │  PVC mt5-prefix (hostPath in node)  │
         │  * wine prefix /opt/mt5             │
         │  * METATRADER install + programs     │
         │  * login (authorized) state          │
@@ -41,9 +43,9 @@ dev's **behavior** with a thin, headless, minimal image.
         └──────────────────────────────────────┘
 ```
 
-The volume is **shared/external** (one instance = one PV in k8s). The **same** PV
-instance backs both dev and prod in k8s. dev and prod **must not** run simultaneously
-on the same volume.
+The prefix is **shared** (one PVC, one instance). The **same** PVC backs both dev
+and prod. dev and prod **must not** run simultaneously on the same prefix —
+`strategy: Recreate` enforces that.
 
 ---
 
@@ -70,7 +72,7 @@ tini
            └─ monitor-mt5-logs.sh  (tail → stdout)    (backgrounded)
 ```
 
-**Key point:** on the shared volume the MT5 install + login already exist, so steps
+**Key point:** on the shared prefix PVC the MT5 install + login already exist, so steps
 [1]–[4] no-op and MT5 *resumes* the persisted session without a GUI.
 
 ---
@@ -88,8 +90,8 @@ The EA is attached by **MT5 itself** at launch (build 6090) — no GUI automatio
    ```
    Written to **two** locations: the install root *and* the terminal UUID dir.
 2. MT5 reads `startup.ini` at boot → opens the chart → attaches the EA.
-3. Data/session persistence lives in the shared volume, so the seed persisted in dev's
-   GUI carries over to the same volume in prod.
+3. Data/session persistence lives in the shared prefix PVC, so the seed persisted in dev's
+   GUI carries over to the same PVC in prod.
 
 ```
 MT5_AUTO_START_EA            ┌──────────────────────────────┐
@@ -111,17 +113,15 @@ MT5_AUTO_START_PERIOD        │   writes startup.ini          │
 ```
 prod/
 ├── Dockerfile                  # thin base + deps + scripts baked in
-├── docker-compose.yml          # 1 service; ports, env, volume, bind mounts
-├── .env / .env.example         # runtime config (dynamic)
+├── .env / .env.example         # credentials source for Secret mt5-secrets
 ├── README.md
 ├── ARCHITECTURE.md             # (this)
 └── Metatrader/
     ├── headless.sh             # Xvfb + passes to start.sh
     ├── start.sh                # install/launch + EA auto-start + API
-    ├── monitor-mt5-logs.sh     # tail → [EA:..][SYSTEM:..] on stdout
-    └── startup.ini             # EA/Symbol/Period            (bind-mounted)
+    └── monitor-mt5-logs.sh     # tail → [EA:..][SYSTEM:..] on stdout
 
-../mql5/                       # repo-root tree, bind-mounted → /opt/mt5/.../MQL5/
+mql5/                          # repo-root tree, cloned into the pod at MQL5_GIT_REF
 ├── Experts/TestAutoStartEA.{mq5,ex5}
 ├── Profiles/                  # chart/template/symbolset state
 ├── Include/ Scripts/ Services/
@@ -131,13 +131,12 @@ prod/
 
 ---
 
-## 5. Mounts (bind mounts)
+## 5. Storage
 
-| Host path | Container path | Note |
+| Source | Container path | Note |
 |---|---|---|
-| `../mql5` | `…/MetaTrader 5/MQL5/` | shared MQL5 tree — bind mount over volume |
-| `./Metatrader/startup.ini` | `…/MetaTrader 5/startup.ini` | one-shot boot file |
-| external volume `mt5-vantage` | `/opt/mt5/` | the whole Wine prefix |
+| `emptyDir`, filled by init container `fetch-mql5` (git clone at `MQL5_GIT_REF`) | `…/MetaTrader 5/MQL5/` | per-pod MQL5 tree; runtime writes die with the pod |
+| PVC `mt5-prefix` (hostPath `/var/lib/mt5/prefix` in the node) | `/opt/mt5/` | the whole Wine prefix, shared with dev |
 
 ---
 
@@ -153,8 +152,8 @@ MT5 terminal write  ──▶  MQL5/logs/*.log  (UTF-16LE)
                                           [SYSTEM:...] ...
 ```
 
-Everything lands on **stdout** — so `docker logs -f mt5_prod` shows EA + system
-activity without exec-ing in.
+Everything lands on **stdout** — so `kubectl -n mt5 logs -f deploy/mt5` shows EA
+and system activity without exec-ing in.
 
 ---
 
@@ -163,19 +162,20 @@ activity without exec-ing in.
 - `mt5linux` runs on the **Linux side** (installed via pip in the image), not inside
   Wine. It talks to the Windows MT5 terminal through the `MetaTrader5` Python library
   (installed into Wine Python) over the Wine network/pipe bridge.
-- port **8001** (in-container), published **8002** on host.
+- port **8001** (in-container), host **8001** (kind maps host 8001 → node 30801).
 - Controlled by `ENABLE_MT5LINUX_API=true`.
 - Used by external code to query markets / send orders through the MT5 account.
 
 ---
 
-## 8. Config & k8s mapping
+## 8. Config mapping
 
-| prod/compose/.env | k8s |
+| `prod/.env` (credentials, → Secret `mt5-secrets`) | ConfigMap `mt5-env` |
 |---|---|
-| `MT5_SERVER`, `MT5_ACCOUNT`, `MT5_PASSWORD` | Secret |
-| `MT5_AUTO_START_EA/SYMBOL/PERIOD`, `ENABLE_MT5LINUX_API` | ConfigMap (Helm/Kustomize) |
-| done inline | Helm chart values |
+| `MT5_SERVER`, `MT5_ACCOUNT`, `MT5_PASSWORD` | `MT5_AUTO_START_EA/SYMBOL/PERIOD`, `ENABLE_MT5LINUX_API`, `MQL5_GIT_URL/REF` |
+
+`kind-up.sh` builds the Secret from `prod/.env` on first run; everything else
+non-secret lives in `deploy/base/configmap.yaml`.
 
 ---
 
@@ -183,14 +183,17 @@ activity without exec-ing in.
 
 - base `tobix/wine:stable` ≈ **2.5GB**
 - + Linux deps (python3, mt5linux; xdotool **removed**) — small
-- + no MQL5 baked in (the shared `../mql5/` tree is mounted at runtime)
+- + no MQL5 baked in (the pod clones `mql5/` into an `emptyDir` at start)
 - Final local image ≈ **2.7GB** (vs dev ~8.8GB) — leaner; further reduction is limited
   by the Wine base itself.
 
 ---
 
-## 10. Future / k8s notes
+## 10. Future notes
 
-- The shared volume `mt5-vantage` already models the k8s PV.
-- Instance → pod; ConfigMap/Secret injections replace `.env`.
-- MinIO later serves the MQL5 archive instead of the local hostPath/bind mount.
+- The prefix PVC `mt5-prefix` is the single writable state; a second instance would
+  need its own PVC.
+- ConfigMap `mt5-env` / Secret `mt5-secrets` are the only injection points; `.env`
+  files exist solely as the credentials source for `kind-up.sh`.
+- A future artifact store could serve the MQL5 archive instead of a `git clone` at
+  pod start (the init container is the only seam that would change).

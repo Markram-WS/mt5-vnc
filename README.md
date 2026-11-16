@@ -21,11 +21,10 @@ the kustomize + kind deployment that runs them on a single-node local cluster.
 | `dev/` | `gmag11/metatrader5_vnc` (~8.8 GB) | KasmVNC on `:3000` | `:8001` | `HEADLESS=false`, `mt5linux==1.0.11` pin, `xdotool` login fallback |
 | `prod/` | `tobix/wine:stable` (~0.8 GB base) | none — `Xvfb :99` | `:8001` | `HEADLESS=true`, no xdotool, lower resource requests/limits |
 
-Both modes use the **same** `mql5/` tree; neither image bakes MQL5 in. On
-Kubernetes the pod fetches it itself: the `fetch-mql5` init container clones
-this repo at `MQL5_GIT_REF` (ConfigMap `mt5-env`, pinned to the tag `mql5-v1`)
-into an `emptyDir` mounted at `.../MetaTrader 5/MQL5`; compose instead
-bind-mounts `../mql5` into the same path. The tree holds `mql5/Include`, the
+Both modes use the **same** `mql5/` tree; neither image bakes MQL5 in. The pod
+fetches it itself: the `fetch-mql5` init container clones this repo at
+`MQL5_GIT_REF` (ConfigMap `mt5-env`, pinned to the tag `mql5-v1`) into an
+`emptyDir` mounted at `.../MetaTrader 5/MQL5`. The tree holds `mql5/Include`, the
 authored `mql5/Experts/TestAutoStartEA.{mq5,ex5}` and `mql5/Profiles`, and both
 modes auto-start the EA the same way:
 `start.sh` writes `startup.ini` (`[StartUp] Expert / Symbol / Period`) before
@@ -111,7 +110,7 @@ and VNC user/password. They exist on disk only — all three are gitignored.
 
 ## Documentation
 
-* [dev/README.md](dev/README.md) — dev mode: VNC, mt5linux, volumes, env vars.
+* [dev/README.md](dev/README.md) — dev mode: VNC, mt5linux, storage, env vars.
 * [prod/README.md](prod/README.md) — headless mode: quickstart, dynamic config.
 * [prod/ARCHITECTURE.md](prod/ARCHITECTURE.md) — how dev and prod share one
   Wine prefix and differ.

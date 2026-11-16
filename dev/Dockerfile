@@ -74,7 +74,7 @@ COPY Metatrader/headless.sh /Metatrader/headless.sh
 COPY Metatrader/log-retention.sh /Metatrader/log-retention.sh
 COPY Metatrader/monitor-mt5-logs.sh /Metatrader/monitor-mt5-logs.sh
 # Create s6 init-mt5 service: longrun that waits for the display, then runs
-# start.sh in the foreground as root. All output flows to stdout so `podman logs`
+# start.sh in the foreground as root. All output flows to stdout so `kubectl logs`
 # shows every log. Longrun also auto-restarts the setup if MT5 exits.
 RUN mkdir -p /etc/s6-overlay/s6-rc.d/init-mt5/dependencies.d && \
     printf '#!/usr/bin/with-contenv bash\n\

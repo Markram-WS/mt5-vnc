@@ -28,9 +28,9 @@ ENV WINEPREFIX=/opt/mt5
 ENV WINEARCH=win64
 ENV WINEDLLOVERRIDES="winemenubuilder.exe=d,mscoree=n"
 # Runtime behaviour is fully dynamic: HEADLESS, ENABLE_MT5LINUX_API, and the
-# MT5_AUTO_START_* EA config are injected at runtime from .env / compose /
-# (on k8s) ConfigMap+Secret. Defaults for the MT5_AUTO_START_* keys live in
-# Metatrader/start.sh, so neither the image nor a rebuild is needed to change them.
+# MT5_AUTO_START_* EA config are injected at runtime from the ConfigMap
+# mt5-env and Secret mt5-secrets. Defaults for the MT5_AUTO_START_* keys live
+# in Metatrader/start.sh, so neither the image nor a rebuild is needed.
 
 RUN mkdir -p "$WINEPREFIX" && \
     xvfb-run -a WINEDEBUG=-all wineboot 2>/dev/null || true
@@ -40,9 +40,9 @@ RUN mkdir -p "$WINEPREFIX" && \
 RUN printf '127.0.0.1 update.mql5.com\n127.0.0.1 updates.mql5.com\n' >> /etc/hosts
 
 # ---------------------------------------------------------------------------
-# Copy scripts (verified working in dev). The MQL5 tree is NOT baked in: both
-# modes mount the repo's single mql5/ tree at runtime (k8s hostPath, compose
-# bind mount), so the image stays mode-agnostic.
+# Copy scripts (verified working in dev). The MQL5 tree is NOT baked in: the
+# pod clones it from git into an emptyDir at start (init container fetch-mql5),
+# so the image stays mode-agnostic.
 # ---------------------------------------------------------------------------
 COPY Metatrader/headless.sh /Metatrader/headless.sh
 COPY Metatrader/start.sh /Metatrader/start.sh

@@ -9,24 +9,11 @@ resources:
   - ../../base
   - storage.yaml
 
+# kind host ports (30300 -> 3000, 30801 -> 8001), shared with kind-prod.
+components:
+  - ../../components/kind-nodeports
+
 images:
   - name: mt5
     newName: localhost/mt5-dev
     newTag: dev
-
-patches:
-  # NodePorts are identical in both modes because the modes never run
-  # simultaneously; the kind cluster maps 30300 -> host 3000, 30801 -> 8001.
-  - target:
-      kind: Service
-      name: mt5
-    patch: |-
-      - op: replace
-        path: /spec/type
-        value: NodePort
-      - op: add
-        path: /spec/ports/0/nodePort
-        value: 30300
-      - op: add
-        path: /spec/ports/1/nodePort
-        value: 30801

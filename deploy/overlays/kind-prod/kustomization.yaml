@@ -9,26 +9,16 @@ resources:
   - ../../base
   - storage.yaml
 
+# kind host ports (30300 -> 3000, 30801 -> 8001), shared with kind-dev.
+components:
+  - ../../components/kind-nodeports
+
 images:
   - name: mt5
     newName: localhost/mt5-prod
     newTag: prod
 
 patches:
-  - target:
-      kind: Service
-      name: mt5
-    patch: |-
-      - op: replace
-        path: /spec/type
-        value: NodePort
-      - op: add
-        path: /spec/ports/0/nodePort
-        value: 30300
-      - op: add
-        path: /spec/ports/1/nodePort
-        value: 30801
-
   # Headless switch. The prod image's entrypoint already runs headless.sh
   # unconditionally; this keeps the rendered pod spec truthful.
   - target:

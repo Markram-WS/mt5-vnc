@@ -1,14 +1,13 @@
-# Non-secret runtime configuration. Mirrors the environment blocks of
-# dev/docker-compose.yml and prod/docker-compose.yml.
+# Non-secret runtime configuration for the mt5 pod.
 #
 # HEADLESS is the single mode switch the dev image's entrypoint reads
 # (/Metatrader/entrypoint.sh: HEADLESS=true -> headless.sh, else -> /init).
 # The prod image ignores it (its entrypoint is always headless.sh) but the
-# value is kept accurate so `kubectl describe` tells the truth.
+# kind-prod overlay still sets it to true so `kubectl describe` tells the truth.
 #
 # Every key is supplied here; start.sh supplies its own defaults only as a
-# fallback, and prod/.env values (MT5_AUTO_START_*) are baked in on purpose so
-# the EA auto-start config is identical to the compose deployments.
+# fallback. The EA auto-start keys mirror what dev/.env and prod/.env use, so
+# the EA config is identical no matter which mode is applied.
 apiVersion: v1
 kind: ConfigMap
 metadata:

@@ -4,8 +4,8 @@
 # a StorageClass because kind ships no default provisioner and binding must be
 # deterministic: the prefix lives at /var/lib/mt5/prefix inside the node
 # container, which is the extraMount of the host directory @DATA_DIR@ (ext4 —
-# Wine needs real UNIX symlinks in the prefix; exFAT breaks it, see the compose
-# notes and the dev Dockerfile comment).
+# Wine needs real UNIX symlinks in the prefix; exFAT breaks it, see the dev
+# Dockerfile comment).
 #
 # The same PV/PVC is used by kind-prod (one PV, one PVC, one Deployment), so a
 # mode switch never re-creates the prefix.

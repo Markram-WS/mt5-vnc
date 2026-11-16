@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# The kind port contract, defined once for every overlay that runs on kind.
+#
+# The cluster template maps host 3000 -> node 30300 (VNC) and host 8001 ->
+# node 30801 (mt5linux), identically in both modes because dev and prod never
+# run at the same time. Base keeps the Service a plain ClusterIP; opting into
+# this component is what makes it reachable from the host.
+patches:
+  - target:
+      kind: Service
+      name: mt5
+    patch: |-
+      - op: replace
+        path: /spec/type
+        value: NodePort
+      - op: add
+        path: /spec/ports/0/nodePort
+        value: 30300
+      - op: add
+        path: /spec/ports/1/nodePort
+        value: 30801
