@@ -23,11 +23,11 @@ the kustomize + kind deployment that runs them on a single-node local cluster.
 
 Both modes use the **same** `mql5/` tree; neither image bakes MQL5 in. On
 Kubernetes the pod fetches it itself: the `fetch-mql5` init container clones
-this repo at `MQL5_GIT_REF` (ConfigMap `mt5-env`, default `main`) into an
-`emptyDir` mounted at `.../MetaTrader 5/MQL5`; compose instead bind-mounts
-`../mql5` into the same path. The tree holds `mql5/Include`, the authored
-`mql5/Experts/TestAutoStartEA.{mq5,ex5}` and `mql5/Profiles`, and both modes
-auto-start the EA the same way:
+this repo at `MQL5_GIT_REF` (ConfigMap `mt5-env`, pinned to the tag `mql5-v1`)
+into an `emptyDir` mounted at `.../MetaTrader 5/MQL5`; compose instead
+bind-mounts `../mql5` into the same path. The tree holds `mql5/Include`, the
+authored `mql5/Experts/TestAutoStartEA.{mq5,ex5}` and `mql5/Profiles`, and both
+modes auto-start the EA the same way:
 `start.sh` writes `startup.ini` (`[StartUp] Expert / Symbol / Period`) before
 every MT5 launch, and MT5 attaches the EA on boot. `MT5_AUTO_START_EA`,
 `MT5_AUTO_START_SYMBOL` and `MT5_AUTO_START_PERIOD` select it at runtime, so no
@@ -53,6 +53,18 @@ differ only in image, `HEADLESS` and resources; both mount the same MQL5 tree:
   NodePorts `30300`/`30801`.
 * `deploy/overlays/kind-prod` — image `localhost/mt5-prod:prod`, headless, lean
   requests/limits, same NodePorts.
+
+### MQL5 delivery and release
+
+Pods never read this checkout: `fetch-mql5` clones `MQL5_GIT_URL` at
+`MQL5_GIT_REF` — the annotated tag `mql5-v1`, ~295 files — into a per-pod
+`emptyDir`. Release: commit (including the recompiled `.ex5`; a `.mq5` edit
+alone changes nothing) → `git tag -a mql5-vN` → `git push --tags` → point
+`MQL5_GIT_REF` at the new tag in `deploy/base/configmap.yaml` →
+`kubectl apply -k deploy/overlays/kind-prod` (or `kind-dev`) →
+`kubectl -n mt5 rollout restart deploy/mt5`. Rolling back is the same steps
+with the previous tag. Runtime MQL5 state (logs, `experts.dat`, rewritten
+`Profiles`) lives only in that `emptyDir` and is lost when the pod restarts.
 
 ### The shared Wine-prefix rule
 

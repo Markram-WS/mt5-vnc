@@ -55,7 +55,10 @@ services:
     volumes:
       # Persistent mt5
       - mt5-vantage:/opt/mt5/
-      # Shared repo MQL5 tree (one tree for both modes)
+      # Shared repo MQL5 tree (one tree for both modes).
+      # Compose-only: this is the authoring/test tree. Kubernetes pods do NOT
+      # read it -- the fetch-mql5 init container clones the pinned tag
+      # mql5-v1 (ConfigMap mt5-env MQL5_GIT_REF) into the pod's own emptyDir.
       - ../mql5:/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/
       # Host-controlled startup.ini (MT5 reads + one-shot-consumes this in
       # portable mode; start.sh rewrites it before every launch)

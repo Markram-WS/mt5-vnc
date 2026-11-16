@@ -23,7 +23,7 @@ data:
   # means "latest push wins"; use a tag when a rollout must reproduce exactly
   # one tree (git clone --branch accepts branches and tags, not raw SHAs).
   MQL5_GIT_URL: "https://github.com/Markram-WS/mt5-vnc.git"
-  MQL5_GIT_REF: "main"
+  MQL5_GIT_REF: "mql5-v1"
   VNC_RESOLUTION: "1280x800"
   COMPANY_ENV: "production"
   COMPANY_REGION: "us-east-1"

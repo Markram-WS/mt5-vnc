@@ -43,7 +43,10 @@ services:
       # SHARE the EXACT volume dev uses (login + MT5 install + EA profile state).
       # Same PV that will back this in Kubernetes.
       - mt5-vantage:/opt/mt5/
-      # Shared repo MQL5 tree (one tree for both modes)
+      # Shared repo MQL5 tree (one tree for both modes).
+      # Compose-only: this is the authoring/test tree. Kubernetes pods do NOT
+      # read it -- the fetch-mql5 init container clones the pinned tag
+      # mql5-v1 (ConfigMap mt5-env MQL5_GIT_REF) into the pod's own emptyDir.
       - ../mql5:/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/
       - ./Metatrader/startup.ini:/opt/mt5/drive_c/Program Files/MetaTrader 5/startup.ini
     shm_size: '256m'

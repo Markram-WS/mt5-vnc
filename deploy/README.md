@@ -172,9 +172,10 @@ extraMounts whose host path does not exist.
   pod is fully gone before the new one mounts the PVC).
 * MQL5 is **fetched from git, not mounted and not baked**: the `fetch-mql5`
   init container clones `MQL5_GIT_URL` at `MQL5_GIT_REF` (ConfigMap `mt5-env`,
-  default `main`) and copies `mql5/.` into the pod's writable `emptyDir`, which
-  the app container mounts at `/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5`.
-  A branch ref means each pod start picks up the latest push; a tag pins it.
+  pinned to the tag `mql5-v1`) and copies `mql5/.` into the pod's writable
+  `emptyDir`, which the app container mounts at
+  `/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5`. A tag means every pod
+  start clones exactly one tree; a branch ref would take the latest push.
 * Consequence: **changing MQL5 (EA source, `.ex5`, includes, profiles) needs no
   image build** — commit + push, then restart the workload:
 
@@ -204,6 +205,18 @@ files must be added with `git add -f`. `mql5/Profiles` is tracked deliberately:
 without it MT5 boots but never loads the expert. MT5 rewrites
 `mql5/Profiles/Agents/metatrader-default.md` at runtime, so that file shows up
 as modified after a session (`git checkout -- mql5/Profiles` restores it).
+
+## MQL5 delivery and release
+
+Pods clone `MQL5_GIT_REF` from `MQL5_GIT_URL` at start into a per-pod
+`emptyDir` (~295 files); neither the checkout nor the compose bind mounts are
+read by Kubernetes. Release a tree with: commit (including the compiled
+`.ex5` — a `.mq5` edit alone never changes behavior) → `git tag -a mql5-vN` →
+`git push --tags` → update `MQL5_GIT_REF` in `deploy/base/configmap.yaml` →
+`kubectl apply -k deploy/overlays/kind-prod` (or `kind-dev`) →
+`kubectl -n mt5 rollout restart deploy/mt5`. A rollback repeats those steps with
+the previous tag. Runtime MQL5 state (logs, `experts.dat`, rewritten `Profiles`)
+exists only in the `emptyDir` and is lost on restart.
 
 ## Secrets
 
