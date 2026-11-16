@@ -1,0 +1,71 @@
+services:
+  mt5-node:
+    build: .
+    container_name: mt5_app
+    restart: unless-stopped
+    # -------------------------------------------------------------
+    # ⚙️ Mode selection:
+    # Dev  (มี VNC)      -> ["3000:3000", "8001:8001"]
+    # Prod (Headless)   -> ["8001:8001"]
+    # -------------------------------------------------------------
+    ports:
+      - "3000:3000"
+      - "8001:8001"
+
+    environment:
+      # VNC Credentials (development mode)
+      CUSTOM_USER: ${MT5_VNC_USER}
+      PASSWORD: ${MT5_VNC_PASSWORD}
+      VNC_RESOLUTION: "1280x800"
+
+      # MT5 Credentials for auto-login
+      MT5_SERVER: ${MT5_SERVER:-}
+      MT5_ACCOUNT: ${MT5_ACCOUNT:-}
+      MT5_PASSWORD: ${MT5_PASSWORD:-}
+
+      # Company/Environment Configuration
+      COMPANY_ENV: ${COMPANY_ENV:-production}
+      COMPANY_REGION: ${COMPANY_REGION:-us-east-1}
+      MT5_BROKER_SERVER: ${MT5_BROKER_SERVER:-}
+      MT5_BROKER_PORT: ${MT5_BROKER_PORT:-443}
+
+      # API Configuration
+      ENABLE_MT5LINUX_API: ${ENABLE_MT5LINUX_API:-true}
+      # Auto-start EA configuration
+      MT5_AUTO_START_EA: ${MT5_AUTO_START_EA:-TestAutoStartEA}
+      MT5_AUTO_START_SYMBOL: ${MT5_AUTO_START_SYMBOL:-EURUSD}
+      MT5_AUTO_START_PERIOD: ${MT5_AUTO_START_PERIOD:-H1}
+
+      # Log retention: delete MT5 log files older than N days (daily). 0 = off.
+      LOG_RETENTION_DAYS: ${LOG_RETENTION_DAYS:-7}
+      LOG_RETENTION_INTERVAL: ${LOG_RETENTION_INTERVAL:-86400}
+
+      # Mode Selection
+      HEADLESS: ${HEADLESS:-false}
+      WINEPREFIX: /opt/mt5
+
+      # System Configuration
+      LSIO_NON_ROOT_USER: "true"
+
+    # Guaranteed MT5 LiveUpdate block (compose injects these into /etc/hosts)
+    extra_hosts:
+      - "update.mql5.com:127.0.0.1"
+      - "updates.mql5.com:127.0.0.1"
+
+    volumes:
+      # Persistent mt5
+      - mt5-vantage:/opt/mt5/
+      # Mount EA/mt5Scripts into MT5 (Wine prefix is on overlayfs, not exFAT)
+      - ./mql5:/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/
+      # Host-controlled startup.ini (MT5 reads + one-shot-consumes this in
+      # portable mode; start.sh rewrites it before every launch)
+      - ./Metatrader/startup.ini:/opt/mt5/drive_c/Program Files/MetaTrader 5/startup.ini
+    shm_size: '256m'
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
+
+volumes:
+   mt5-vantage:
+   mt5-vantage-session:

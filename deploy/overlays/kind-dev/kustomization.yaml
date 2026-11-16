@@ -1,0 +1,50 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# dev mode: gmag11/metatrader5_vnc base image, KasmVNC UI on 3000,
+# mt5linux API on 8001, HEADLESS=false (from the base ConfigMap).
+namespace: mt5
+
+resources:
+  - ../../base
+  - storage.yaml
+
+images:
+  - name: mt5
+    newName: localhost/mt5-dev
+    newTag: dev
+
+patches:
+  # NodePorts are identical in both modes because the modes never run
+  # simultaneously; the kind cluster maps 30300 -> host 3000, 30801 -> 8001.
+  - target:
+      kind: Service
+      name: mt5
+    patch: |-
+      - op: replace
+        path: /spec/type
+        value: NodePort
+      - op: add
+        path: /spec/ports/0/nodePort
+        value: 30300
+      - op: add
+        path: /spec/ports/1/nodePort
+        value: 30801
+
+  # MQL5 tree for this mode. Replaced wholesale (JSON6902) because a strategic
+  # merge would leave the base's emptyDir source next to the new hostPath and
+  # produce an invalid volume.
+  - target:
+      kind: Deployment
+      name: mt5
+    patch: |-
+      - op: test
+        path: /spec/template/spec/volumes/1/name
+        value: mql5
+      - op: replace
+        path: /spec/template/spec/volumes/1
+        value:
+          name: mql5
+          hostPath:
+            path: /var/lib/mt5/dev-mql5
+            type: Directory

@@ -1,0 +1,6 @@
+.env
+*.md
+config/
+Tests/
+.vscode/
+.idea/

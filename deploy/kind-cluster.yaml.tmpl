@@ -1,0 +1,34 @@
+# kind cluster definition for mt5 (rendered by scripts/kind-up.sh).
+#
+# @REPO_ROOT@ and @DATA_DIR@ are substituted by the script, which then feeds the
+# rendered file to `kind create cluster --config`. Do not apply this directly.
+#
+# One control-plane node. The host port mappings are identical in both modes
+# because dev and prod never run at the same time:
+#   3000 (host)  -> 30300 (node) : KasmVNC UI   (dev only; nothing binds it in prod)
+#   8001 (host)  -> 30801 (node) : mt5linux API (both modes)
+#
+# extraMounts: the node is the only place a hostPath PV can point at, so the
+# three host trees are mounted there under fixed paths:
+#   @DATA_DIR@                     -> /var/lib/mt5            (Wine prefix, MUST be ext4)
+#   @REPO_ROOT@/dev/mql5           -> /var/lib/mt5/dev-mql5  (dev MQL5 tree)
+#   @REPO_ROOT@/prod/mql5          -> /var/lib/mt5/prod-mql5 (prod MQL5 tree)
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: mt5
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30300
+        hostPort: 3000
+        protocol: TCP
+      - containerPort: 30801
+        hostPort: 8001
+        protocol: TCP
+    extraMounts:
+      - hostPath: @DATA_DIR@
+        containerPath: /var/lib/mt5
+      - hostPath: @REPO_ROOT@/dev/mql5
+        containerPath: /var/lib/mt5/dev-mql5
+      - hostPath: @REPO_ROOT@/prod/mql5
+        containerPath: /var/lib/mt5/prod-mql5

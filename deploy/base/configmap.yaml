@@ -1,0 +1,33 @@
+# Non-secret runtime configuration. Mirrors the environment blocks of
+# dev/docker-compose.yml and prod/docker-compose.yml.
+#
+# HEADLESS is the single mode switch the dev image's entrypoint reads
+# (/Metatrader/entrypoint.sh: HEADLESS=true -> headless.sh, else -> /init).
+# The prod image ignores it (its entrypoint is always headless.sh) but the
+# value is kept accurate so `kubectl describe` tells the truth.
+#
+# Every key is supplied here; start.sh supplies its own defaults only as a
+# fallback, and prod/.env values (MT5_AUTO_START_*) are baked in on purpose so
+# the EA auto-start config is identical to the compose deployments.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mt5-env
+  labels:
+    app.kubernetes.io/name: mt5
+    app.kubernetes.io/part-of: mt5
+data:
+  VNC_RESOLUTION: "1280x800"
+  COMPANY_ENV: "production"
+  COMPANY_REGION: "us-east-1"
+  MT5_BROKER_SERVER: ""
+  MT5_BROKER_PORT: "443"
+  ENABLE_MT5LINUX_API: "true"
+  MT5_AUTO_START_EA: "TestAutoStartEA"
+  MT5_AUTO_START_SYMBOL: "EURUSD"
+  MT5_AUTO_START_PERIOD: "H1"
+  LOG_RETENTION_DAYS: "7"
+  LOG_RETENTION_INTERVAL: "86400"
+  HEADLESS: "false"
+  WINEPREFIX: "/opt/mt5"
+  LSIO_NON_ROOT_USER: "true"

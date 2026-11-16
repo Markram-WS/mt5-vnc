@@ -1,0 +1,44 @@
+# Node-local storage for the shared Wine prefix.
+#
+# A pre-bound PV+PVC pair (storageClassName "" + volumeName) is used instead of
+# a StorageClass because kind ships no default provisioner and binding must be
+# deterministic: the prefix lives at /var/lib/mt5/prefix inside the node
+# container, which is the extraMount of the host directory @DATA_DIR@ (ext4 —
+# Wine needs real UNIX symlinks in the prefix; exFAT breaks it, see the compose
+# notes and the dev Dockerfile comment).
+#
+# The same PV/PVC is used by kind-prod (one PV, one PVC, one Deployment), so a
+# mode switch never re-creates the prefix.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mt5-prefix-pv
+  labels:
+    app.kubernetes.io/name: mt5
+    app.kubernetes.io/part-of: mt5
+spec:
+  capacity:
+    storage: 20Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    path: /var/lib/mt5/prefix
+    type: Directory
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mt5-prefix
+  labels:
+    app.kubernetes.io/name: mt5
+    app.kubernetes.io/part-of: mt5
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: ""
+  volumeName: mt5-prefix-pv

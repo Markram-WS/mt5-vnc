@@ -1,0 +1,78 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# prod mode: tobix/wine:stable base image, headless (Xvfb :99, no VNC),
+# mt5linux API on 8001, HEADLESS=true, leaner resources.
+namespace: mt5
+
+resources:
+  - ../../base
+  - storage.yaml
+
+images:
+  - name: mt5
+    newName: localhost/mt5-prod
+    newTag: prod
+
+patches:
+  - target:
+      kind: Service
+      name: mt5
+    patch: |-
+      - op: replace
+        path: /spec/type
+        value: NodePort
+      - op: add
+        path: /spec/ports/0/nodePort
+        value: 30300
+      - op: add
+        path: /spec/ports/1/nodePort
+        value: 30801
+
+  # Headless switch. The prod image's entrypoint already runs headless.sh
+  # unconditionally; this keeps the rendered pod spec truthful.
+  - target:
+      kind: ConfigMap
+      name: mt5-env
+    patch: |-
+      - op: replace
+        path: /data/HEADLESS
+        value: "true"
+
+  - target:
+      kind: Deployment
+      name: mt5
+    patch: |-
+      # The prod image's ENTRYPOINT is ["/tini","--","/Metatrader/headless.sh"],
+      # but the current tobix/wine:stable ships tini at /usr/bin/tini and has no
+      # /tini, so the container dies at start with
+      #   exec: "/tini": stat /tini: no such file or directory
+      # (upstream drift in a moving base tag; prod/Dockerfile is not ours to
+      # change here). Override the entrypoint path in the overlay instead: same
+      # PID-1 reaper, correct location.
+      - op: add
+        path: /spec/template/spec/containers/0/command
+        value:
+          - /usr/bin/tini
+          - --
+          - /Metatrader/headless.sh
+      - op: test
+        path: /spec/template/spec/volumes/1/name
+        value: mql5
+      - op: replace
+        path: /spec/template/spec/volumes/1
+        value:
+          name: mql5
+          hostPath:
+            path: /var/lib/mt5/prod-mql5
+            type: Directory
+      # Lean headless footprint (no KasmVNC/nginx/s6 stack to run).
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi

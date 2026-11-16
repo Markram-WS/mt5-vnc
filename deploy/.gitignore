@@ -1,0 +1,3 @@
+# Generated at run time by scripts/kind-up.sh from the selected mode's .env.
+# Never commit it: it holds the VNC and MT5 credentials.
+base/secrets.env

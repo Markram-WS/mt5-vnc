@@ -1,0 +1,163 @@
+# The one and only MT5 workload.
+#
+# dev (VNC) and prod (headless) are NOT two Deployments: they are two image
+# builds behind the same Deployment, switched by re-applying the matching
+# overlay. Both mount the same Wine-prefix PVC ("mt5-prefix") and
+# strategy: Recreate guarantees the old pod is gone before the new one starts,
+# so two MT5 processes can never touch the prefix at the same time (that is the
+# dev/prod exclusivity rule from prod/ARCHITECTURE.md, enforced structurally).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mt5
+  labels:
+    app.kubernetes.io/name: mt5
+    app.kubernetes.io/part-of: mt5
+spec:
+  replicas: 1
+  # A cold prefix installs Wine Mono + MetaTrader 5 inside the pod, which takes
+  # far longer than the 600s Deployment default; without this, kubectl rollout
+  # status reports "exceeded its progress deadline" while the install is still
+  # progressing normally.
+  progressDeadlineSeconds: 1800
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mt5
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mt5
+        app.kubernetes.io/part-of: mt5
+    spec:
+      # compose used extra_hosts; k8s regenerates /etc/hosts, so hostAliases is
+      # the only way to keep MT5 LiveUpdate blocked (start.sh re-checks and
+      # appends at runtime too, but /etc/hosts is root-owned in some images).
+      hostAliases:
+        - ip: 127.0.0.1
+          hostnames:
+            - update.mql5.com
+            - updates.mql5.com
+      # The PVC mounts at /opt/mt5 and therefore HIDES the Wine prefix that both
+      # images bake into that path during build. Docker's named volume used to
+      # copy the image content into the empty volume on first mount; a
+      # Kubernetes hostPath PV is just an empty directory. Without seeding,
+      # start.sh finds no system.reg, runs `wineboot`, and wineboot pops the
+      # INTERACTIVE "install Wine Mono" dialog (control.exe appwiz.cpl
+      # install_mono) and blocks forever — fatal in headless prod.
+      # This init container sees the PVC at /prefix (so /opt/mt5 still shows the
+      # image content) and copies it once, which reproduces the compose
+      # behaviour and keeps every registry path valid (same /opt/mt5 target).
+      initContainers:
+        - name: seed-prefix
+          image: mt5
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              if [ -f /prefix/system.reg ]; then
+                echo "[init-prefix] prefix already initialized; leaving it untouched"
+                exit 0
+              fi
+              echo "[init-prefix] seeding empty prefix from the image's baked Wine prefix"
+              cp -a /opt/mt5/. /prefix/
+              echo "[init-prefix] done"
+          volumeMounts:
+            - name: prefix
+              mountPath: /prefix
+        # The two images ship DIFFERENT Wine vintages (dev: wine 10.0,
+        # prod: wine 11.0), and they share one prefix. Whichever mode starts
+        # after the other therefore finds a "stale" prefix and the first Wine
+        # command in start.sh (`wine reg add ...`) triggers `wineboot --init`,
+        # which pops the INTERACTIVE "install Wine Mono" dialog and hangs the
+        # container forever (observed: control.exe appwiz.cpl install_mono).
+        # Completing the pending prefix update here, with mscoree disabled so
+        # wineboot never prompts, makes start.sh see an up-to-date prefix.
+        - name: prepare-prefix
+          image: mt5
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/bash
+            - -c
+            - |
+              export WINEPREFIX=/opt/mt5
+              export WINEDEBUG=-all
+              export WINEDLLOVERRIDES="mscoree=d;mshtml=d"
+              if [ ! -f /opt/mt5/system.reg ]; then
+                echo "[init-prefix] no prefix yet; nothing to update"
+                exit 0
+              fi
+              echo "[init-prefix] completing pending prefix update for this Wine build"
+              xvfb-run -a wineboot -u || echo "[init-prefix] WARN: wineboot -u returned non-zero"
+          volumeMounts:
+            - name: prefix
+              mountPath: /opt/mt5
+      containers:
+        - name: mt5
+          # Base name only; every overlay pins newName/newTag.
+          image: mt5
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: mt5-env
+            - secretRef:
+                name: mt5-secrets
+          ports:
+            - name: vnc
+              containerPort: 3000
+              protocol: TCP
+            - name: mt5linux
+              containerPort: 8001
+              protocol: TCP
+          # start.sh starts mt5linux on 8001 before launching MT5, so 8001 is
+          # the stable readiness signal in BOTH modes (dev VNC is up earlier,
+          # prod has no 3000 at all). A first boot installs MT5 inside the pod:
+          # 120 x 10s = 20 min of startup budget before kubelet gives up.
+          startupProbe:
+            tcpSocket:
+              port: 8001
+            periodSeconds: 10
+            failureThreshold: 120
+          readinessProbe:
+            tcpSocket:
+              port: 8001
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            tcpSocket:
+              port: 8001
+            periodSeconds: 30
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+          volumeMounts:
+            - name: prefix
+              mountPath: /opt/mt5
+            # Mirrors the compose bind mount: hides the MQL5 tree baked into
+            # the image and serves the mode's host tree instead.
+            - name: mql5
+              mountPath: /opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5
+            # compose: shm_size 256m
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        # Shared dev/prod Wine prefix. Provided by the environment (the kind
+        # overlays create the PV+PVC; a real cluster supplies its own).
+        - name: prefix
+          persistentVolumeClaim:
+            claimName: mt5-prefix
+        # Placeholder source: both overlays replace this volume wholesale with
+        # the mode-specific hostPath (JSON6902 replace, /spec/template/spec/
+        # volumes/1). Keep it at index 1.
+        - name: mql5
+          emptyDir: {}
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
