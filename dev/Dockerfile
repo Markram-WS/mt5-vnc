@@ -7,6 +7,25 @@ RUN apt-get update && \
     apt-get install -y python3-xdg python3-pip xdotool xvfb && \
     rm -rf /var/lib/apt/lists/*
 
+# Replace the base image's winehq-stable 10.0 with winehq-devel 11.x.
+# MT5's anti-debug check misfires on Wine 10 ("A debugger has been found
+# running in your system" -> OK kills terminal64.exe, no EA, no journal).
+# Prod already runs wine 11 (tobix/wine:stable), so this aligns dev with prod.
+# winehq-devel 11.11 has no published i386 half, so 11.10 is the newest
+# installable full pair -- pinned exactly, never floating.
+# The amd64 halves are named explicitly: with i386 as a foreign arch, apt
+# resolves winehq-devel's unqualified `wine-devel` dependency to the i386
+# package, which yields a 32-bit-only wine and a win32 prefix (MT5 is 64-bit).
+RUN dpkg --add-architecture i386 && \
+    apt-get update && \
+    { apt-get purge -y winehq-stable wine-stable wine-stable-amd64 wine-stable-i386:i386 || true; } && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --install-recommends \
+        winehq-devel=11.10~bookworm-1 \
+        wine-devel:amd64=11.10~bookworm-1 \
+        wine-devel-amd64=11.10~bookworm-1 && \
+    wine --version && \
+    rm -rf /var/lib/apt/lists/*
+
 RUN pip install --break-system-packages --no-cache-dir mt5linux==1.0.11
 
 # Fix mt5linux: remove -w flag default

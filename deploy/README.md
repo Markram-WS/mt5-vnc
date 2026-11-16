@@ -87,9 +87,10 @@ silently, and proceeds to install MT5.
 
 ### Cross-mode prefix updates (`prepare-prefix`)
 
-The two images ship **different Wine vintages** (dev: wine 10.0 from
-`gmag11/metatrader5_vnc`, prod: wine 11.0 from `tobix/wine:stable`) and share one
-prefix. Whichever mode starts after the other therefore finds a stale prefix, and
+The two images ship **different Wine vintages** (dev: winehq-devel 11.10
+installed over `gmag11/metatrader5_vnc`, prod: wine 11.0 from
+`tobix/wine:stable`) and share one prefix — a dev/prod patch-level difference
+only. Whichever mode starts after the other therefore finds a stale prefix, and
 the first Wine command in `start.sh` (`wine reg add ...Wine Updater...`) triggers
 `wineboot --init`, which pops the **interactive** "install Wine Mono" dialog
 (`control.exe appwiz.cpl install_mono`) and hangs the container (observed on the
@@ -262,6 +263,17 @@ if it times out, watch progress with `kubectl -n mt5 logs deploy/mt5 -f`.
 
 ## Known deviations and pins
 
+* **dev image pins `winehq-devel=11.10~bookworm-1` (`dev/Dockerfile`).** The
+  `gmag11/metatrader5_vnc` base ships `winehq-stable` **10.0**, where MT5's
+  anti-debug check misfires: a modal "A debugger has been found running in your
+  system" appears, its OK button terminates `terminal64.exe`, and the container
+  ends up with no terminal, no EA and no journal. Reproduced with both a fresh
+  wine-10 prefix and a copy of the prod prefix, so it is Wine-version-specific,
+  not prefix-specific. `dev/Dockerfile` now purges the stable packages, adds
+  `i386`, and installs winehq-devel 11 pinned to an exact version (no floating
+  tag) before the `wineboot`/Mono steps. `11.11` publishes no i386 half, so
+  `11.10` is the newest installable full pair. `prod/Dockerfile` already ships
+  wine 11 from `tobix/wine:stable` and is unchanged.
 * **dev image pins `mt5linux==1.0.11` (`dev/Dockerfile`).** `mt5linux` >= 1.1.0
   uses PEP 701 multi-line f-string expressions in `mt5linux/metatrader5.py`,
   which require **Python >= 3.12**; the `gmag11/metatrader5_vnc` base image ships
