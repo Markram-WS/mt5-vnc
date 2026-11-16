@@ -1,0 +1,22 @@
+# Wine prefix for the homelab cluster.
+#
+# Unlike the kind overlays there is no PV here: the single-node Talos cluster
+# has the local-path provisioner (StorageClass "local-path"), which creates a
+# hostPath volume on the node on first bind. That makes the PVC bound to THIS
+# node — the data survives pod restarts and rescheduling only while the node
+# exists; reprovisioning the node loses it (and with it the MT5 install, the
+# login state and the EA profile).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mt5-prefix
+  labels:
+    app.kubernetes.io/name: mt5
+    app.kubernetes.io/part-of: mt5
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: local-path

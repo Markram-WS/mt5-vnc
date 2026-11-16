@@ -27,24 +27,34 @@ deploy/
 │   ├── configmap.yaml         # mt5-env: non-secret env
 │   ├── deployment.yaml        # Deployment mt5: Recreate, prefix PVC, shm, probes
 │   ├── service.yaml           # Service mt5: ClusterIP, vnc 3000 + mt5linux 8001
-│   ├── kustomization.yaml     # namespace mt5 + secretGenerator mt5-secrets
+│   ├── kustomization.yaml     # namespace mt5 + resources (no secretGenerator)
 │   └── secrets.env.example    # CUSTOM_USER/PASSWORD, MT5_SERVER/ACCOUNT/PASSWORD
 ├── components/
-│   └── kind-nodeports/
-│       └── kustomization.yaml # Service NodePort 30300/30801 (shared by both modes)
+│   ├── kind-nodeports/
+│   │   └── kustomization.yaml # Service NodePort 30300/30801 (shared by both modes)
+│   └── prod-headless/
+│       └── kustomization.yaml # HEADLESS=true + tini entrypoint + lean resources
 ├── overlays/
 │   ├── kind-dev/
-│   │   ├── kustomization.yaml # image :dev + components
+│   │   ├── kustomization.yaml # image :dev, secretGenerator + kind-nodeports
 │   │   └── storage.yaml       # PV mt5-prefix-pv + PVC mt5-prefix
-│   └── kind-prod/
-│       ├── kustomization.yaml # image :prod, HEADLESS=true, entrypoint, lean limits
-│       └── storage.yaml
+│   ├── kind-prod/
+│   │   ├── kustomization.yaml # image :prod, prod-headless + kind-nodeports components
+│   │   └── storage.yaml
+│   └── homelab/               # prod on the real (Talos) cluster — NOT applied yet
+│       ├── kustomization.yaml # image markram92/mt5-prod:1.0.0, NodePort 30801 only
+│       ├── storage.yaml       # PVC mt5-prefix on StorageClass local-path
+│       └── externalsecret.yaml # mt5-secrets from Vault secret/mt5/prod
+├── clusters/
+│   └── base/
+│       └── kustomization.yaml # Flux entry point -> ../../overlays/homelab
 ├── kind-cluster.yaml.tmpl     # kind Cluster (placeholders @REPO_ROOT@ / @DATA_DIR@)
 ├── registries.conf            # short-name aliases (host has no /etc/containers/registries.conf)
 └── README.md
 scripts/
 ├── kind-up.sh                 # --mode dev|prod: build, load, apply, wait
-└── kind-down.sh
+├── kind-down.sh
+└── push-image.sh              # build prod/ and push markram92/mt5-prod:<tag>
 ```
 
 ## Usage
@@ -223,15 +233,23 @@ exists only in the `emptyDir` and is lost on restart.
 
 ## Secrets
 
-`deploy/base/secrets.env` is required at render time (it feeds the
-`mt5-secrets` secretGenerator, `disableNameSuffixHash: true`). It is never
-printed and never committed.
+There are two backends, chosen by the overlay:
 
-`kind-up.sh` creates it on first run from the selected mode's `.env`
-(`dev/.env` for dev, `prod/.env` for prod) by reading
+* **`kind-dev` / `kind-prod`** — a `secretGenerator` (`mt5-secrets`,
+  `disableNameSuffixHash: true`) reads a `secrets.env` that sits **inside the
+  overlay** (`deploy/overlays/kind-dev/secrets.env`,
+  `deploy/overlays/kind-prod/secrets.env`). It is not in `base/` because
+  kustomize refuses an env file outside the kustomization root
+  (`security; file … is not in or below …`), and because the base must render
+  from committed files alone so the homelab overlay can replace the Secret with
+  an `ExternalSecret`.
+* **`homelab`** — the same Secret name is produced from Vault by an
+  `ExternalSecret`; see "Homelab (prod) overlay" below.
+
+`kind-up.sh` creates the overlay's `secrets.env` on first run from that mode's
+`.env` (`dev/.env` for dev, `prod/.env` for prod) by reading
 `MT5_VNC_USER`, `MT5_VNC_PASSWORD`, `MT5_SERVER`, `MT5_ACCOUNT`,
-`MT5_PASSWORD` with `grep`/`cut` — the file is never `source`d — and writes it
-with mode `0600`:
+`MT5_PASSWORD` with `grep`/`cut` — the file is never `source`d — and writes it:
 
 | secrets.env key | Source `.env` key | Consumed as |
 |---|---|---|
@@ -241,21 +259,20 @@ with mode `0600`:
 | `MT5_ACCOUNT` | `MT5_ACCOUNT` | MT5 `/login` account |
 | `MT5_PASSWORD` | `MT5_PASSWORD` | MT5 `/login` password |
 
-If neither `.env` exists, the script copies `secrets.env.example`, exits `1` and
-tells you to fill it in. Empty `MT5_*` values are acceptable — `start.sh` then
+If the mode's `.env` does not exist either, the script copies
+`base/secrets.env.example` to the overlay's `secrets.env`, exits `1` and tells
+you to fill it in. Empty `MT5_*` values are acceptable — `start.sh` then
 launches MT5 without `/login` arguments.
 
-`secrets.env` is generated **only on the first run**, from the mode passed at
-that moment (`--mode dev` reads `dev/.env`, `--mode prod` reads `prod/.env`).
-The script never regenerates an existing file, so if the two modes have
-different credentials you must delete `deploy/base/secrets.env` and re-run
-`kind-up.sh`; otherwise the previous mode's values are silently reused.
+Each overlay's `secrets.env` is generated **only when absent**, so dev and prod
+keep independent credentials and re-running `kind-up.sh` never overwrites a file
+you already filled in. Delete `deploy/overlays/<mode>/secrets.env` to regenerate
+it from that mode's `.env`.
 
 Because this checkout is on **exFAT**, which stores no POSIX modes, `chmod 600`
-on `deploy/base/secrets.env` is a no-op; the script verifies the mode and prints
-a warning instead of pretending the file is private. The file is outside the
-`dev/` git repository, but do not put production credentials in an exFAT
-checkout.
+on those files is a no-op; the script verifies the mode and prints a warning
+instead of pretending the file is private. Do not put production credentials in
+an exFAT checkout.
 
 Non-secret configuration lives in `ConfigMap mt5-env` in `base/configmap.yaml`:
 `MQL5_GIT_URL`/`MQL5_GIT_REF`, `VNC_RESOLUTION`, `COMPANY_ENV`,
@@ -263,6 +280,111 @@ Non-secret configuration lives in `ConfigMap mt5-env` in `base/configmap.yaml`:
 `ENABLE_MT5LINUX_API`, `MT5_AUTO_START_EA/SYMBOL/PERIOD`,
 `LOG_RETENTION_DAYS`, `LOG_RETENTION_INTERVAL`, `HEADLESS`, `WINEPREFIX`,
 `LSIO_NON_ROOT_USER`.
+
+## Homelab (prod) overlay
+
+`deploy/overlays/homelab` is the same headless workload as `kind-prod`, but
+running on the real single-node Talos cluster (`admin@homelab-cluster`, ~4 CPU /
+~8 GB RAM) instead of kind. It shares the base and the `prod-headless`
+component, so `HEADLESS=true`, the `tini` entrypoint and the lean resources are
+byte-identical to `kind-prod`; only image, storage, secret source and Service
+ports differ.
+
+**It has not been applied.** Everything below is the procedure for the first
+apply.
+
+### 1. Registry: build and push the image
+
+The overlay pins `markram92/mt5-prod:1.0.0` (Docker Hub), so the image has to
+exist in the registry before the pod can start:
+
+```bash
+podman login docker.io                 # once; the auth store has no docker.io entry yet
+./scripts/push-image.sh                # builds prod/ and pushes tag 1.0.0
+./scripts/push-image.sh 1.0.1         # explicit tag (edit the overlay's newTag to match)
+./scripts/push-image.sh 1.0.0 --build-only   # build + tag locally, no push, no auth needed
+```
+
+`push-image.sh` stages the build context under `$TMPDIR` (this checkout is on
+exFAT, where buildah cannot mount its overlay), tags `markram92/mt5-prod:<tag>`
+and pushes. It refuses with a non-zero exit **before** building when
+`~/.config/containers/auth.json` is missing or holds no `docker.io` entry, and
+it never prints credentials — it only inspects the registry key names in the
+auth store. A pushed tag has to match the overlay's `newTag`; re-pushing an
+existing tag does not update a running pod (the Deployment is
+`imagePullPolicy: IfNotPresent`), so use a new tag or `kubectl rollout restart`.
+
+### 2. Vault: write the five keys
+
+The homelab overlay has **no `secretGenerator`**. `externalsecret.yaml` asks the
+external-secrets operator (ClusterSecretStore `vault-backend`, the fleet
+convention) to materialize Secret `mt5-secrets` from Vault:
+
+| key | consumer |
+|---|---|
+| `CUSTOM_USER` | KasmVNC user (unused in headless, still required by `start.sh`) |
+| `PASSWORD` | KasmVNC password (unused in headless) |
+| `MT5_SERVER` | MT5 `/login` server |
+| `MT5_ACCOUNT` | MT5 `/login` account |
+| `MT5_PASSWORD` | MT5 `/login` password |
+
+Vault path: **`secret/mt5/prod`**, one property per key, `refreshInterval: 1h`.
+Write it before applying:
+
+```bash
+vault kv put secret/mt5/prod \
+  CUSTOM_USER=... PASSWORD=... MT5_SERVER=... MT5_ACCOUNT=... MT5_PASSWORD=...
+```
+
+Until the path exists, the ExternalSecret reports `SecretSyncedError` and the
+pod sits in `CreateContainerConfigError` (Secret `mt5-secrets` absent). Nothing
+in the repo holds these values.
+
+### 3. Apply
+
+```bash
+# NOT run yet — this is the manual path.
+kubectl --context admin@homelab-cluster apply -k deploy/overlays/homelab
+```
+
+The overlay creates `Namespace mt5`, `ConfigMap mt5-env`, the Deployment, the
+Service, the PVC and the ExternalSecret. Expect the first rollout to take many
+minutes: the PVC starts empty, so `seed-prefix` copies the baked Wine prefix,
+`prepare-prefix` completes the pending Wine update and MT5 installs itself
+inside the pod (the base `startupProbe` allows 20 minutes; the Deployment's
+`progressDeadlineSeconds` is 1800).
+
+### 4. Flux alternative
+
+Fleet convention: app repos are registered in
+`/mnt/storage/talos/terraform/terraform.tfvars` with
+`path = "./deploy/clusters/base"` (the other fleet apps use `./clusters/base`,
+so this repo keeps the entry point under `deploy/` and the tfvars value points
+at it). Then `terraform apply` from the infra repo; Flux clones the repo and
+kustomize-builds that one directory, which resolves to
+`deploy/overlays/homelab`. Nothing under `talos/` is modified by this repo.
+
+### Cluster-specific differences from kind
+
+* **Storage.** `PVC mt5-prefix` requests 10Gi from `StorageClass local-path`
+  (no PV manifest: the provisioner creates a hostPath volume on the single
+  node on first bind). The Wine prefix, the MT5 install, the login state and the
+  EA profile therefore survive pod restarts and rescheduling **on that node**,
+  but not node reprovisioning or cluster rebuild.
+* **Service.** Only the `mt5linux` API is published — `NodePort 30801`
+  (`<node-ip>:30801`), the same port the kind overlays use. There is no VNC
+  port: prod is headless. The container still *declares* `containerPort 3000`
+  from base; nothing listens on it.
+* **Resources.** Limits 1 CPU / 1Gi, requests 100m / 256Mi — a deliberate cap on
+  a ~8 GB node shared with the rest of the homelab. The image is pulled once
+  (`imagePullPolicy: IfNotPresent`).
+* **MQL5.** Unchanged: the `fetch-mql5` init container clones this repo at the
+  pinned tag `mql5-v1` (`ConfigMap mt5-env`) into a per-pod `emptyDir`; the
+  image carries no MQL5.
+* **Namespace.** `Namespace mt5` is part of the render, so the first real apply
+  creates it. A `--dry-run=server` run still fails on the namespaced objects
+  until it exists (dry-run never persists the namespace), which is expected and
+  not a manifest problem — verify with `--dry-run=client` instead.
 
 ## Security notes
 
@@ -274,10 +396,13 @@ Non-secret configuration lives in `ConfigMap mt5-env` in `base/configmap.yaml`:
   logs can read them: restrict `pods/exec` and `pods/log` RBAC (and local
   `kubectl` access to the cluster) accordingly. This is inherited from
   `start.sh`, not introduced by the manifests.
-* **`deploy/base/secrets.env` sits on exFAT**, where `chmod 600` is a no-op, so
-  the file is readable by any local user who can read the checkout. `kind-up.sh`
-  verifies the mode and warns instead of implying the file is private; keep real
-  credentials out of this checkout (or move `deploy/` to a POSIX filesystem).
+* **The kind overlays' `secrets.env` sit on exFAT**, where `chmod 600` is a
+  no-op, so those files are readable by any local user who can read the
+  checkout. `kind-up.sh` verifies the mode and warns instead of implying the
+  file is private; keep real credentials out of this checkout (or move
+  `deploy/` to a POSIX filesystem). The homelab overlay avoids the problem
+  entirely: its credentials are materialized into the cluster from Vault by the
+  ExternalSecret and never exist as a file here.
 * The KasmVNC UI (dev mode only) is published on host `:3000` with the
   `CUSTOM_USER`/`PASSWORD` pair from that file; prod exposes only the mt5linux
   API on `:8001`, with no authentication of its own.
@@ -334,10 +459,17 @@ if it times out, watch progress with `kubectl -n mt5 logs deploy/mt5 -f`.
 ## Verifying a render without a cluster
 
 ```bash
-kubectl kustomize deploy/overlays/kind-dev  > /dev/null
-kubectl kustomize deploy/overlays/kind-prod > /dev/null
-bash -n scripts/kind-up.sh && bash -n scripts/kind-down.sh
+kubectl kustomize deploy/base                    > /dev/null   # no local secrets needed
+kubectl kustomize deploy/overlays/kind-dev       > /dev/null   # needs overlays/kind-dev/secrets.env
+kubectl kustomize deploy/overlays/kind-prod      > /dev/null   # needs overlays/kind-prod/secrets.env
+kubectl kustomize deploy/overlays/homelab        > /dev/null   # no local secrets needed
+kubectl kustomize deploy/clusters/base           > /dev/null   # Flux entry point
+kubectl --context admin@homelab-cluster apply --dry-run=client -k deploy/overlays/homelab
+bash -n scripts/kind-up.sh && bash -n scripts/kind-down.sh && bash -n scripts/push-image.sh
 ```
 
-(Requires `deploy/base/secrets.env` to exist — run `kind-up.sh` once, or copy
-the example.)
+The kind overlays each need their own `secrets.env` (run `kind-up.sh` once for
+that mode, or copy `deploy/base/secrets.env.example` next to the overlay's
+`kustomization.yaml`). `deploy/base` and `deploy/overlays/homelab` render from
+committed files alone — that is the point of keeping the `secretGenerator` out
+of base.

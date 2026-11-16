@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Flux entry point for this repo (fleet convention: every app repo registers
+# ./clusters/base in talos/terraform/terraform.tfvars and Flux kustomize-builds
+# it). It contains nothing but the app overlay, so registering the repo does not
+# need a second kustomization.
+resources:
+  - ../../overlays/homelab

@@ -12,8 +12,8 @@ the kustomize + kind deployment that runs them on a single-node local cluster.
 ├── mql5/         # the one MQL5 tree, mounted by BOTH modes
 ├── dev/          # interactive mode: KasmVNC UI + mt5linux API
 ├── prod/         # headless mode: mt5linux API only, minimal image
-├── deploy/       # kustomize base + kind-dev / kind-prod overlays
-└── scripts/      # kind-up.sh, kind-down.sh
+├── deploy/       # kustomize base + kind-dev / kind-prod / homelab overlays
+└── scripts/      # kind-up.sh, kind-down.sh, push-image.sh
 ```
 
 | Mode | Base image | UI | API | Notes |
@@ -46,12 +46,30 @@ the expert.
 differ only in image, `HEADLESS` and resources; both mount the same MQL5 tree:
 
 * `deploy/base/` — namespace, ConfigMap `mt5-env`, Deployment, Service
-  (ClusterIP, VNC 3000 + mt5linux 8001), `secretGenerator` from
-  `deploy/base/secrets.env`.
+  (ClusterIP, VNC 3000 + mt5linux 8001). No secret: it has to render from
+  committed files alone.
+* `deploy/components/prod-headless` — the shared prod deltas (`HEADLESS=true`,
+  `tini` entrypoint, lean requests/limits), used by every prod overlay.
 * `deploy/overlays/kind-dev` — image `localhost/mt5-dev:dev`, UI enabled,
-  NodePorts `30300`/`30801`.
+  NodePorts `30300`/`30801`, `secretGenerator` from its own `secrets.env`.
 * `deploy/overlays/kind-prod` — image `localhost/mt5-prod:prod`, headless, lean
   requests/limits, same NodePorts.
+* `deploy/overlays/homelab` — the same prod workload on the real cluster: image
+  `markram92/mt5-prod:1.0.0`, `ExternalSecret` from Vault, `local-path` PVC, only
+  the API on NodePort `30801`. **Not applied yet** — see
+  [deploy/README.md](deploy/README.md#homelab-prod-overlay) for the registry,
+  Vault, apply and Flux steps.
+
+### Homelab (prod)
+
+The same prod workload is prepared for the homelab Talos cluster as
+`deploy/overlays/homelab` (Docker Hub image `markram92/mt5-prod:1.0.0`,
+Vault-backed `mt5-secrets` via `ExternalSecret`, `local-path` PVC, API on
+NodePort `30801`) and is **not applied yet**. The registry push
+(`podman login docker.io` then `./scripts/push-image.sh <tag>`), the five Vault
+keys under `secret/mt5/prod`, the manual apply and the Flux registration are all
+documented in
+[deploy/README.md](deploy/README.md#homelab-prod-overlay).
 
 ### MQL5 delivery and release
 
@@ -89,24 +107,28 @@ UNIX symlinks, and a prefix on exFAT fails with `STATUS_DLL_NOT_FOUND`
 ./scripts/kind-down.sh
 ```
 
-`kind-up.sh` creates `deploy/base/secrets.env` from the selected mode's `.env`
-on first run, builds the mode's image, loads it into kind and waits for the pod
-to become Ready (a cold prefix installs Mono, Wine Python and MT5, so the first
-rollout takes minutes).
+`kind-up.sh` creates `deploy/overlays/<mode>/secrets.env` from the selected
+mode's `.env` on first run, builds the mode's image, loads it into kind and
+waits for the pod to become Ready (a cold prefix installs Mono, Wine Python and
+MT5, so the first rollout takes minutes).
 
 Render a mode without a cluster:
 
 ```bash
-cp deploy/base/secrets.env.example deploy/base/secrets.env   # once
+cp deploy/base/secrets.env.example deploy/overlays/kind-dev/secrets.env   # once per overlay
 kubectl kustomize deploy/overlays/kind-dev
 kubectl kustomize deploy/overlays/kind-prod
+kubectl kustomize deploy/overlays/homelab        # no local secrets needed
 ```
 
 ## Secrets
 
-`dev/.env`, `prod/.env` and `deploy/base/secrets.env` hold the MT5 credentials
-and VNC user/password. They exist on disk only — all three are gitignored.
-`deploy/base/secrets.env.example` documents the expected keys.
+`dev/.env`, `prod/.env` and `deploy/overlays/*/secrets.env` hold the MT5
+credentials and VNC user/password. They exist on disk only — all of them are
+gitignored, and `deploy/base/secrets.env.example` documents the expected keys.
+The kind overlays generate the Secret from their own `secrets.env`; the homelab
+overlay instead syncs the same Secret name from Vault
+(`secret/mt5/prod`) through an `ExternalSecret`.
 
 ## Documentation
 

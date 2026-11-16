@@ -1,3 +1,9 @@
-# Generated at run time by scripts/kind-up.sh from the selected mode's .env.
-# Never commit it: it holds the VNC and MT5 credentials.
+# Generated at run time by scripts/kind-up.sh from the selected mode's .env,
+# one file per kind overlay (kustomize only accepts env files inside the
+# kustomization root). Never commit them: they hold the VNC and MT5 credentials.
+overlays/*/secrets.env
+
+# Legacy single-file location (before the secretGenerator moved into the
+# overlays). Nothing reads it any more; still ignored so a stale file cannot be
+# committed by accident.
 base/secrets.env

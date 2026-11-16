@@ -75,7 +75,6 @@ fi
 
 CLUSTER_NAME="mt5"
 KIND_CONFIG_TMPL="deploy/kind-cluster.yaml.tmpl"
-SECRETS_FILE="deploy/base/secrets.env"
 SECRETS_EXAMPLE="deploy/base/secrets.env.example"
 DATA_DIR="${MT5_DATA_DIR:-$HOME/mt5-data}"
 # The Wine prefix must live on a real filesystem: Wine maps built-in DLLs with
@@ -96,6 +95,13 @@ case "$MODE" in
         ENV_FILE="prod/.env"
         ;;
 esac
+
+# The secret is generated INSIDE the overlay: kustomize refuses an env file that
+# lies outside the kustomization root ("security; file ... is not in or below"),
+# so each overlay owns its own deploy/overlays/<mode>/secrets.env. Keeping it
+# out of base/ is what lets base — and the homelab overlay — render without any
+# local secret file.
+SECRETS_FILE="$OVERLAY/secrets.env"
 
 # `podman save` writes uncompressed layers (dev image is ~8.8GB), so the
 # archive must NOT go to $TMPDIR — on this host /tmp is a 7.5GB tmpfs.
@@ -175,6 +181,9 @@ env_value() {
     printf '%s' "$line"
 }
 
+# Credentials for this mode's overlay. Never printed, never committed: the file
+# is written mode 0600 (best effort on exFAT) from the mode's .env, and only
+# when it does not exist yet — a later run of the other mode keeps its own file.
 echo "==> Checking $SECRETS_FILE"
 if [ ! -f "$SECRETS_FILE" ]; then
     if [ ! -f "$ENV_FILE" ]; then

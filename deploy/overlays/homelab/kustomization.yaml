@@ -1,0 +1,52 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# prod on the homelab cluster (single-node Talos, real Docker Hub image).
+# NOT applied yet: see deploy/README.md, "Homelab (prod) overlay".
+namespace: mt5
+
+resources:
+  - ../../base
+  - storage.yaml
+  - externalsecret.yaml
+
+# Same prod deltas as kind-prod (HEADLESS=true, tini entrypoint, lean
+# resources). No kind-nodeports component: the homelab cluster has no kind
+# port mappings, and this overlay publishes only the API.
+components:
+  - ../../components/prod-headless
+
+images:
+  - name: mt5
+    newName: markram92/mt5-prod
+    newTag: 1.0.0
+
+patches:
+  # The Service keeps ONLY the mt5linux API: prod is headless, so there is no
+  # VNC port to publish. 30801 matches the port the kind overlays use, so the
+  # client side stays the same across clusters.
+  - target:
+      kind: Service
+      name: mt5
+    patch: |-
+      - op: replace
+        path: /spec/type
+        value: NodePort
+      - op: replace
+        path: /spec/ports
+        value:
+          - name: mt5linux
+            port: 8001
+            targetPort: mt5linux
+            protocol: TCP
+            nodePort: 30801
+
+  # Pin the pull policy explicitly: the tag is a release tag, so the node only
+  # pulls when the image is absent (a re-tagged build needs a pod restart).
+  - target:
+      kind: Deployment
+      name: mt5
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
