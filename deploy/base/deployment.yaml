@@ -50,6 +50,33 @@ spec:
       # image content) and copies it once, which reproduces the compose
       # behaviour and keeps every registry path valid (same /opt/mt5 target).
       initContainers:
+        # MQL5 comes from git, not from the node and not from the image:
+        # clone the repo at MQL5_GIT_REF and copy mql5/ into the emptyDir the
+        # app container mounts at .../MetaTrader 5/MQL5. Anonymous HTTPS works
+        # because the repo is public; keep the volume writable (MT5 writes
+        # logs, experts.dat and Profiles into it at runtime).
+        - name: fetch-mql5
+          image: alpine/git
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: mt5-env
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              echo "[init-mql5] cloning $MQL5_GIT_URL at $MQL5_GIT_REF"
+              git clone --depth 1 --branch "$MQL5_GIT_REF" "$MQL5_GIT_URL" /tmp/repo
+              test -d /tmp/repo/mql5/Experts || {
+                echo "[init-mql5] ERROR: /tmp/repo/mql5/Experts missing at ref $MQL5_GIT_REF" >&2
+                exit 1
+              }
+              cp -a /tmp/repo/mql5/. /mql5/
+              echo "[init-mql5] populated $(ls -A /mql5 | wc -l) entries at /mql5"
+          volumeMounts:
+            - name: mql5
+              mountPath: /mql5
         - name: seed-prefix
           image: mt5
           imagePullPolicy: IfNotPresent
@@ -152,9 +179,9 @@ spec:
         - name: prefix
           persistentVolumeClaim:
             claimName: mt5-prefix
-        # Placeholder source: both overlays replace this volume wholesale with
-        # the mode-specific hostPath (JSON6902 replace, /spec/template/spec/
-        # volumes/1). Keep it at index 1.
+        # MQL5 tree for the pod, populated by the fetch-mql5 init container
+        # from git. Keep it at index 1: the dev/prod overlays no longer replace
+        # it, but the mount is part of the shared contract.
         - name: mql5
           emptyDir: {}
         - name: shm

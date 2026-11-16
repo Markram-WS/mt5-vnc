@@ -17,6 +17,13 @@ metadata:
     app.kubernetes.io/name: mt5
     app.kubernetes.io/part-of: mt5
 data:
+  # MQL5 tree for the pod. The images ship no MQL5; the fetch-mql5 init
+  # container clones this repo at this ref and copies mql5/ into the pod's
+  # emptyDir (the settrade pattern, with mql5/ as the payload). A branch ref
+  # means "latest push wins"; use a tag when a rollout must reproduce exactly
+  # one tree (git clone --branch accepts branches and tags, not raw SHAs).
+  MQL5_GIT_URL: "https://github.com/Markram-WS/mt5-vnc.git"
+  MQL5_GIT_REF: "main"
   VNC_RESOLUTION: "1280x800"
   COMPANY_ENV: "production"
   COMPANY_REGION: "us-east-1"

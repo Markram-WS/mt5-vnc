@@ -9,9 +9,14 @@
 #   8001 (host)  -> 30801 (node) : mt5linux API (both modes)
 #
 # extraMounts: the node is the only place a hostPath PV can point at, so the
-# two host trees are mounted there under fixed paths:
-#   @DATA_DIR@            -> /var/lib/mt5        (Wine prefix, MUST be ext4)
-#   @REPO_ROOT@/mql5      -> /var/lib/mt5/mql5   (shared MQL5 tree, both modes)
+# Wine-prefix tree is mounted there under a fixed path:
+#   @DATA_DIR@ -> /var/lib/mt5 (Wine prefix, MUST be ext4)
+#
+# The MQL5 tree is NOT mounted from the host: the Deployment's fetch-mql5 init
+# container clones the repo (MQL5_GIT_URL / MQL5_GIT_REF in the mt5-env
+# ConfigMap) into an emptyDir and mounts that at .../MetaTrader 5/MQL5. So the
+# repo checkout's location never has to be visible to the node, and a cluster
+# rebuild does not care where it lives.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: mt5
@@ -27,5 +32,3 @@ nodes:
     extraMounts:
       - hostPath: @DATA_DIR@
         containerPath: /var/lib/mt5
-      - hostPath: @REPO_ROOT@/mql5
-        containerPath: /var/lib/mt5/mql5

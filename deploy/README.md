@@ -11,7 +11,7 @@ Two mutually exclusive MT5 modes on one local kind cluster:
 | `HEADLESS` | `false` | `true` |
 | API | `localhost:8001` (mt5linux) | `localhost:8001` (mt5linux) |
 | Resources | requests 250m / 512Mi, limit 2Gi | requests 100m / 256Mi, limits 1 CPU / 1Gi |
-| MQL5 source | `/var/lib/mt5/mql5` (shared `mql5/` tree) | same |
+| MQL5 source | `git clone` of this repo at `MQL5_GIT_REF` → pod `emptyDir` | same |
 
 Both modes are the **same `Deployment/mt5`** in namespace `mt5`, mounting the
 same Wine-prefix PVC and the same MQL5 tree. They differ only in image,
@@ -31,7 +31,7 @@ deploy/
 │   └── secrets.env.example    # CUSTOM_USER/PASSWORD, MT5_SERVER/ACCOUNT/PASSWORD
 ├── overlays/
 │   ├── kind-dev/
-│   │   ├── kustomization.yaml # image :dev, NodePorts, shared MQL5 hostPath
+│   │   ├── kustomization.yaml # image :dev, NodePorts
 │   │   └── storage.yaml       # PV mt5-prefix-pv + PVC mt5-prefix
 │   └── kind-prod/
 │       ├── kustomization.yaml # image :prod, NodePorts, HEADLESS=true, lower limits
@@ -145,8 +145,9 @@ the resolution deterministic instead of search-order dependent.
 * `30300 -> 3000` (VNC) and `30801 -> 8001` (API) host port mappings — identical
   in both modes because the modes never run simultaneously; in prod nothing
   ever listens on 3000;
-* extraMounts: `@DATA_DIR@` → `/var/lib/mt5`,
-  `@REPO_ROOT@/mql5` → `/var/lib/mt5/mql5` (one shared tree for both overlays).
+* extraMounts: `@DATA_DIR@` → `/var/lib/mt5` only. The MQL5 tree is not a host
+  mount any more — the pod clones it itself (see below), so the node never needs
+  to see the repo checkout.
 
 `$MT5_DATA_DIR` defaults to `$HOME/mt5-data` and **must be on a non-exFAT
 filesystem**: Wine maps built-in DLLs with UNIX symlinks, so a prefix on exFAT
@@ -169,10 +170,27 @@ extraMounts whose host path does not exist.
 * **The prefix is single-writer.** dev and prod must not run simultaneously;
   `strategy: Recreate` plus one Deployment enforces that structurally (the old
   pod is fully gone before the new one mounts the PVC).
-* MQL5 is the repo's single `mql5/` tree, mounted from hostPath
-  `/var/lib/mt5/mql5` at `/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5` in
-  both overlays — exactly like the compose bind mount. No image bakes MQL5 in,
-  so the tree is the only source and a mode switch changes nothing about it.
+* MQL5 is **fetched from git, not mounted and not baked**: the `fetch-mql5`
+  init container clones `MQL5_GIT_URL` at `MQL5_GIT_REF` (ConfigMap `mt5-env`,
+  default `main`) and copies `mql5/.` into the pod's writable `emptyDir`, which
+  the app container mounts at `/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5`.
+  A branch ref means each pod start picks up the latest push; a tag pins it.
+* Consequence: **changing MQL5 (EA source, `.ex5`, includes, profiles) needs no
+  image build** — commit + push, then restart the workload:
+
+  ```bash
+  kubectl -n mt5 rollout restart deploy/mt5 && kubectl -n mt5 rollout status deploy/mt5
+  ```
+
+  MT5 runs the committed `.ex5`, so a `.mq5` edit only takes effect once the
+  recompiled `.ex5` is committed too (MetaEditor inside the dev container
+  compiles it into the same tree).
+* The clone lives in an `emptyDir`, so MT5's runtime writes (Profiles rewrite,
+  `experts.dat`, `MQL5/logs`) are per-pod: nothing lands in the git checkout and
+  `git status` stays clean, but EA logs disappear with the pod — read them from
+  `kubectl logs` (`monitor-mt5-logs.sh` streams every EA line to stdout) or from
+  the pod directly. The prefix journal stays host-side under
+  `$MT5_DATA_DIR/prefix/.../logs/`.
 * `startup.ini` is **not** mounted: `start.sh` rewrites it from the
   `MT5_AUTO_START_*` env on every launch.
 * `/dev/shm` is a 256Mi memory-backed emptyDir (compose `shm_size: 256m`).

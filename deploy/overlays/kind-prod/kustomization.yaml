@@ -56,16 +56,6 @@ patches:
           - /usr/bin/tini
           - --
           - /Metatrader/headless.sh
-      - op: test
-        path: /spec/template/spec/volumes/1/name
-        value: mql5
-      - op: replace
-        path: /spec/template/spec/volumes/1
-        value:
-          name: mql5
-          hostPath:
-            path: /var/lib/mt5/mql5
-            type: Directory
       # Lean headless footprint (no KasmVNC/nginx/s6 stack to run).
       - op: replace
         path: /spec/template/spec/containers/0/resources

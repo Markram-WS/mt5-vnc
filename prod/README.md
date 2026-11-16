@@ -80,12 +80,13 @@ On Kubernetes the same variables go to a **ConfigMap** (`MT5_AUTO_START_*`,
 
 There is **one** MQL5 tree in the repo — `../mql5/` at the repository root — and
 prod mounts it at `/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/`
-(`docker-compose.yml`). Dev mounts the same directory, and the k8s overlays
-bind the same hostPath. Nothing is copied between modes any more, and no image
-bakes MQL5 in.
+(`docker-compose.yml`). Dev mounts the same directory; on Kubernetes the pod
+clones the repo at `MQL5_GIT_REF` and serves `mql5/` from an `emptyDir`. Nothing
+is copied between modes any more, and no image bakes MQL5 in.
 
 So dropping a new EA into `../mql5/Experts/` and restarting the container is
-the whole workflow:
+the whole workflow on compose; on Kubernetes it is commit + push + rollout
+restart, still with no image rebuild:
 
 ```bash
 cp MyRobot.ex5 MyRobot.mq5 ../mql5/Experts/
@@ -226,5 +227,6 @@ configure host `journald.conf` (`SystemMaxUse`) / rely on journald rotation.
 - Env (`MT5_AUTO_START_*`, `ENABLE_MT5LINUX_API`) → **ConfigMap**
 - Credentials (`MT5_ACCOUNT/PASSWORD/SERVER`) → **Secret**
 - `MT5_AUTO_START_*` set via **Helm / Kustomization**
-- MQL5 / data served from **MinIO** (future) — today the single repo `mql5/`
-  tree is bind-mounted/hostPath-mounted, no copying or syncing anywhere.
+- MQL5 / data served from **MinIO** (future) — today the pod clones the repo's
+  `mql5/` tree at start, compose bind-mounts the same tree; no copying or
+  syncing anywhere.
