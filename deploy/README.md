@@ -1,24 +1,28 @@
 # Deployment (kustomize + kind/podman)
 
-Two mutually exclusive MT5 modes on one local kind cluster:
+Two environments, one per cluster — **dev on the local kind cluster**, **prod on
+the Talos cluster**:
 
 | | **dev** | **prod** |
 |---|---|---|
-| Overlay | `overlays/kind-dev` | `overlays/kind-prod` |
-| Image | `localhost/mt5-dev:dev` (built from `dev/Dockerfile`) | `localhost/mt5-prod:prod` (built from `prod/Dockerfile`) |
+| Cluster | local kind `mt5` | homelab Talos (single node) |
+| Overlay | `overlays/kind-dev` | `overlays/talos` |
+| Image | `localhost/mt5-dev:dev` (built from `dev/Dockerfile`, loaded into kind) | `markram92/mt5-prod:1.0.0` (Docker Hub, built from `prod/Dockerfile`) |
 | Base image | `gmag11/metatrader5_vnc` (~8.8 GB) | `tobix/wine:stable` (~0.8 GB) |
 | UI | KasmVNC on <http://localhost:3000> | none — `Xvfb :99`, headless |
 | `HEADLESS` | `false` | `true` |
-| API | `localhost:8001` (mt5linux) | `localhost:8001` (mt5linux) |
+| API | `localhost:8001` (mt5linux) | `<node-ip>:30801` (mt5linux) |
 | Resources | requests 250m / 512Mi, limit 2Gi | requests 100m / 256Mi, limits 1 CPU / 1Gi |
 | MQL5 source | `git clone` of this repo at `MQL5_GIT_REF` → pod `emptyDir` | same |
 | MT5 login | host dir `$MT5_DATA_DIR/profile/dev/Config` mounted rw over `…/MetaTrader 5/Config` | `fetch-profile` seeds `Config` from MinIO (bucket `mt5`, prefix `prod-demo`) on first start |
 | MT5 credentials in env | none (`MT5_*` empty) | none (`MT5_*` empty) |
+| MinIO credentials | not needed | `ExternalSecret mt5-minio` from Vault `secret/mt5` |
+| Storage | PV/PVC on node `hostPath /var/lib/mt5/prefix` | PVC on `StorageClass local-path` |
 
-Both modes are the **same `Deployment/mt5`** in namespace `mt5`, mounting the
-same Wine-prefix PVC and the same MQL5 tree. They differ only in image,
-`HEADLESS` and resources, so a mode switch is an in-place update, not a second
-workload.
+Both environments are the **same `Deployment/mt5`** in namespace `mt5` and mount
+the same MQL5 tree; they differ in image, `HEADLESS`, resources, storage and
+where the login profile comes from. There is exactly one apply target per
+cluster, so there is no switch between them on a single cluster.
 
 ## Layout
 
@@ -33,31 +37,28 @@ deploy/
 │   └── secrets.env.example    # CUSTOM_USER/PASSWORD only (MT5_* stay empty)
 ├── components/
 │   ├── kind-nodeports/
-│   │   └── kustomization.yaml # Service NodePort 30300/30801 (shared by both modes)
+│   │   └── kustomization.yaml # Service NodePort 30300/30801 (dev only)
 │   ├── prod-headless/
 │   │   └── kustomization.yaml # HEADLESS=true + tini entrypoint + lean resources
 │   └── fetch-profile/
 │       └── kustomization.yaml # initContainer: seed login Config from MinIO (prod)
 ├── overlays/
-│   ├── kind-dev/
+│   ├── kind-dev/              # DEV: the local kind cluster
 │   │   ├── kustomization.yaml # image :dev, secretGenerator + kind-nodeports
 │   │   ├── profile-volume.yaml # hostPath $MT5_DATA_DIR/profile/dev/Config -> Config (rw)
 │   │   └── storage.yaml       # PV mt5-prefix-pv + PVC mt5-prefix
-│   ├── kind-prod/
-│   │   ├── kustomization.yaml # image :prod, prod-headless + fetch-profile + kind-nodeports
-│   │   └── storage.yaml
-│   └── homelab/               # prod on the real (Talos) cluster — NOT applied yet
+│   └── talos/                 # PROD: the Talos cluster — NOT applied yet
 │       ├── kustomization.yaml # image markram92/mt5-prod:1.0.0, NodePort 30801 only
 │       ├── storage.yaml       # PVC mt5-prefix on StorageClass local-path
 │       └── externalsecret.yaml # mt5-minio from Vault secret/mt5
 ├── clusters/
 │   └── base/
-│       └── kustomization.yaml # Flux entry point -> ../../overlays/homelab
+│       └── kustomization.yaml # Flux entry point -> ../../overlays/talos
 ├── kind-cluster.yaml.tmpl     # kind Cluster (placeholders @REPO_ROOT@ / @DATA_DIR@)
 ├── registries.conf            # short-name aliases (host has no /etc/containers/registries.conf)
 └── README.md
 scripts/
-├── kind-up.sh                 # --mode dev|prod: build, load, apply, wait
+├── kind-up.sh                 # dev only: build, load, apply, wait
 ├── kind-down.sh
 └── push-image.sh              # build prod/ and push markram92/mt5-prod:<tag>
 ```
@@ -65,20 +66,24 @@ scripts/
 ## Usage
 
 ```bash
-./scripts/kind-up.sh --mode dev     # or: ./scripts/kind-up.sh
+./scripts/kind-up.sh                # builds dev/, loads it, applies overlays/kind-dev
 # ... use the VNC UI on http://localhost:3000
-./scripts/kind-up.sh --mode prod    # replaces the dev pod with the headless one
-./scripts/kind-down.sh              # deletes the cluster, keeps images + prefix data
+./scripts/kind-down.sh              # deletes the cluster, keeps image + prefix data
 ```
 
-`kind-up.sh` re-executes itself under
+`kind-up.sh` takes no options: the kind cluster is dev-only, so there is nothing
+to select. It re-executes itself under
 `systemd-run --user --scope --property=Delegate=yes` (rootless podman needs a
 delegated cgroup scope), exports `KIND_EXPERIMENTAL_PROVIDER=podman`, creates
-the cluster if it is missing, builds the mode's image from `dev/` or `prod/`,
+the cluster if it is missing, builds `localhost/mt5-dev:dev` from `dev/`,
 imports it with `podman save` + `kind load image-archive` (kind 0.33 relies on
 `RepoTags` that podman 6 no longer reports, so `kind load docker-image` cannot
-work), applies the overlay, then waits for the PVC to bind and the pod to become
-Ready.
+work), applies `deploy/overlays/kind-dev`, then waits for the PVC to bind and
+the pod to become Ready.
+
+Prod is not deployed from this script at all: build and push the image with
+`./scripts/push-image.sh <tag>`, then apply `deploy/overlays/talos` to the Talos
+cluster (or let Flux do it via `deploy/clusters/base`).
 
 ## Login profile lifecycle (no MT5 credentials)
 
@@ -89,15 +94,16 @@ MT5 logs in from its **login profile**, not from environment variables: the
 so no `/login:… /password:…` ever appears on the terminal command line or in the
 pod's process list.
 
-| mode | where `Config` comes from |
+| environment | where `Config` comes from |
 |---|---|
-| **dev** | host dir `$MT5_DATA_DIR/profile/dev/Config` (= `/var/lib/mt5/profile/dev/Config` in the node), mounted **read-write** over `/opt/mt5/drive_c/Program Files/MetaTrader 5/Config`. `kind-up.sh --mode dev` creates it and, only while it is empty, seeds it from the shared prefix's `Config` file set. |
-| **prod** (kind and homelab) | the `fetch-profile` init container copies `Config` from MinIO (bucket `mt5`, prefix `prod-demo`) on the first start of a prefix that has no `accounts.dat`. |
+| **dev** (kind) | host dir `$MT5_DATA_DIR/profile/dev/Config` (= `/var/lib/mt5/profile/dev/Config` in the node), mounted **read-write** over `/opt/mt5/drive_c/Program Files/MetaTrader 5/Config`. `kind-up.sh` creates it and, only while it is empty, seeds it from the shared prefix's `Config` file set. |
+| **prod** (Talos) | the `fetch-profile` init container copies `Config` from MinIO (bucket `mt5`, prefix `prod-demo`) on the first start of a prefix that has no `accounts.dat`. |
 
 The flow is one-way and one-time: log in manually in dev once → the profile is
 on the host → copy it to MinIO once → every prod pod seeds from it and logs in
 by itself. Nothing in this repo uploads to MinIO, and there is no scheduled or
-periodic sync.
+periodic sync. Both environments use the **same demo account**, so run only one
+of them logged in at a time.
 
 ### Copying the login profile to MinIO (one-time operator step)
 
@@ -202,22 +208,24 @@ target path is still `/opt/mt5`, so the paths recorded in the prefix registry
 stay valid. After this, `start.sh` skips `wineboot`, installs Wine Mono
 silently, and proceeds to install MT5.
 
-The prod overlays add a third init container, `fetch-profile`, which **runs last**
-by construction (the component appends it with a JSON patch — a strategic merge
-patch would put it first, and then `seed-prefix` would overwrite the seeded
-`Config/common.ini`/`servers.dat` with the image defaults). It only acts when
-`Config/accounts.dat` is absent, so an initialized prefix is never touched.
+The Talos prod overlay adds a third init container, `fetch-profile`, which **runs
+last** by construction (the component appends it with a JSON patch — a strategic
+merge patch would put it first, and then `seed-prefix` would overwrite the
+seeded `Config/common.ini`/`servers.dat` with the image defaults). It only acts
+when `Config/accounts.dat` is absent, so an initialized prefix is never touched.
+The dev overlay has no `fetch-profile` at all: it mounts the host `Config`
+directory instead.
 
-### Cross-mode prefix updates (`prepare-prefix`)
+### Prefix updates after a Wine change (`prepare-prefix`)
 
-The two images ship **different Wine vintages** (dev: winehq-devel 11.10
-installed over `gmag11/metatrader5_vnc`, prod: wine 11.0 from
-`tobix/wine:stable`) and share one prefix — a dev/prod patch-level difference
-only. Whichever mode starts after the other therefore finds a stale prefix, and
-the first Wine command in `start.sh` (`wine reg add ...Wine Updater...`) triggers
-`wineboot --init`, which pops the **interactive** "install Wine Mono" dialog
-(`control.exe appwiz.cpl install_mono`) and hangs the container (observed on the
-dev→prod switch; it would equally hang on prod→dev).
+A prefix outlives the image that created it: `$MT5_DATA_DIR/prefix` on the dev
+host and the `local-path` PVC on Talos both persist across image rebuilds. If a
+new image ships a different Wine build than the one that initialized the prefix
+(dev: winehq-devel 11.10 installed over `gmag11/metatrader5_vnc`; prod: wine 11.0
+from `tobix/wine:stable`), the first Wine command in `start.sh`
+(`wine reg add ...Wine Updater...`) triggers `wineboot --init`, which pops the
+**interactive** "install Wine Mono" dialog (`control.exe appwiz.cpl install_mono`)
+and hangs the container.
 
 The second init container, `prepare-prefix`, mounts the PVC at `/opt/mt5` and
 completes that pending update non-interactively before `start.sh` runs:
@@ -229,8 +237,8 @@ xvfb-run -a wineboot -u                        # finish the prefix update silent
 
 `mscoree=d` only suppresses the .NET/Mono bootstrap prompt; MT5 itself does not
 depend on Mono for its core, and the Mono that the dev image already installed
-stays in the prefix. A mode switch costs a few seconds here and nothing
-afterwards (an up-to-date prefix makes `wineboot -u` a no-op).
+stays in the prefix. On an up-to-date prefix `wineboot -u` is a no-op, so the
+normal cost is a few seconds per pod start.
 
 Two filesystem details are load-bearing on this host:
 
@@ -264,9 +272,8 @@ the resolution deterministic instead of search-order dependent.
 `@REPO_ROOT@` and `@DATA_DIR@`) and passed to `kind create cluster --config`:
 
 * cluster name `mt5`, one control-plane node;
-* `30300 -> 3000` (VNC) and `30801 -> 8001` (API) host port mappings — identical
-  in both modes because the modes never run simultaneously; in prod nothing
-  ever listens on 3000;
+* `30300 -> 3000` (VNC) and `30801 -> 8001` (API) host port mappings for the dev
+  workload (dev is the only workload this cluster runs);
 * extraMounts: `@DATA_DIR@` → `/var/lib/mt5` only. The MQL5 tree is not a host
   mount any more — the pod clones it itself (see below), so the node never needs
   to see the repo checkout.
@@ -279,19 +286,23 @@ extraMounts whose host path does not exist.
 
 ## Storage semantics
 
-* One PV `mt5-prefix-pv` (hostPath `/var/lib/mt5/prefix` inside the node, which
-  is the extraMount of `$MT5_DATA_DIR`), `Retain`, `storageClassName: ""`,
-  20Gi, statically bound to `PVC mt5-prefix` via `volumeName`. No StorageClass:
-  kind ships no default provisioner and binding must be deterministic.
-* The same PV/PVC pair is defined in both overlays, so either mode can be
-  applied to a fresh cluster and a mode switch re-uses — never re-creates — the
-  prefix. That is what carries the MT5 install, the login state and the EA
-  profile from dev to prod.
-* `Retain` means deleting the PVC never deletes the prefix; `kind-down.sh`
+Dev and prod have their own storage; nothing is shared between the clusters.
+
+* **dev (kind)** — one PV `mt5-prefix-pv` (hostPath `/var/lib/mt5/prefix` inside
+  the node, which is the extraMount of `$MT5_DATA_DIR`), `Retain`,
+  `storageClassName: ""`, 20Gi, statically bound to `PVC mt5-prefix` via
+  `volumeName`. No StorageClass: kind ships no default provisioner and binding
+  must be deterministic.
+* **prod (Talos)** — `PVC mt5-prefix` requests 10Gi from `StorageClass
+  local-path`; the provisioner creates the node-local volume on first bind (see
+  "Talos (prod) overlay").
+* `Retain` means deleting the dev PVC never deletes the prefix; `kind-down.sh`
   likewise keeps `$MT5_DATA_DIR`.
-* **The prefix is single-writer.** dev and prod must not run simultaneously;
-  `strategy: Recreate` plus one Deployment enforces that structurally (the old
-  pod is fully gone before the new one mounts the PVC).
+* **Each prefix is single-writer.** `strategy: Recreate` plus one Deployment
+  enforces that structurally (the old pod is fully gone before the new one
+  mounts the PVC). Across environments the real conflict is the **shared demo
+  account**, not the storage: dev and prod mount different prefixes, but they
+  log in as the same user, so only one should be running at a time.
 * MQL5 is **fetched from git, not mounted and not baked**: the `fetch-mql5`
   init container clones `MQL5_GIT_URL` at `MQL5_GIT_REF` (ConfigMap `mt5-env`,
   pinned to the tag `mql5-v1`) and copies `mql5/.` into the pod's writable
@@ -323,7 +334,7 @@ extraMounts whose host path does not exist.
   `/opt/mt5/drive_c/Program Files/MetaTrader 5/Config`, read-write. It is inside
   the existing `@DATA_DIR@` extraMount, so adding it needs no cluster recreate.
   The mount sits *above* the prefix PVC for that one path: MT5's login state
-  lives on the host, not in the shared prefix, and prod gets the same file set
+  lives on the host, outside the Wine prefix, and prod gets the same file set
   from MinIO instead.
 * **prod** has no such mount; `fetch-profile` copies `Config` from MinIO into the
   prefix PVC on the first start (seed-once).
@@ -345,7 +356,8 @@ Pods clone `MQL5_GIT_REF` from `MQL5_GIT_URL` at start into a per-pod
 Release a tree with: commit (including the compiled
 `.ex5` — a `.mq5` edit alone never changes behavior) → `git tag -a mql5-vN` →
 `git push --tags` → update `MQL5_GIT_REF` in `deploy/base/configmap.yaml` →
-`kubectl apply -k deploy/overlays/kind-prod` (or `kind-dev`) →
+`kubectl apply -k deploy/overlays/kind-dev` (dev) or `kubectl apply -k
+deploy/overlays/talos` (prod, or Flux via `deploy/clusters/base`) →
 `kubectl -n mt5 rollout restart deploy/mt5`. A rollback repeats those steps with
 the previous tag. Runtime MQL5 state (logs, `experts.dat`, rewritten `Profiles`)
 exists only in the `emptyDir` and is lost on restart.
@@ -354,25 +366,21 @@ exists only in the `emptyDir` and is lost on restart.
 
 There are two secrets, and only one of them is about MT5 at all:
 
-* **`mt5-secrets`** (kind overlays only, optional on base) — a `secretGenerator`
+* **`mt5-secrets`** (kind-dev only, optional on base) — a `secretGenerator`
   (`disableNameSuffixHash: true`) reads a `secrets.env` that sits **inside the
-  overlay** (`deploy/overlays/kind-dev/secrets.env`,
-  `deploy/overlays/kind-prod/secrets.env`). It carries only the VNC pair
-  (`CUSTOM_USER`/`PASSWORD`, consumed by the dev image's KasmVNC). `MT5_*` keys
-  are present but **empty**: MT5 logs in from the profile (see "Login profile
-  lifecycle"). The base Deployment declares the ref `optional: true`, so a prod
-  cluster can run with no Secret at all.
-* **`mt5-minio`** (prod overlays only) — MinIO credentials for the
-  `fetch-profile` init container: `MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY`. On kind
-  it is generated by `kind-up.sh --mode prod` from the gitignored
-  `credentials.minio.mt5.json` (`kubectl create secret … --dry-run=client -o
-  yaml | kubectl apply -f -`, values passed through a 0600 temp env file, never
-  printed); on the homelab cluster it comes from Vault via an `ExternalSecret`.
+  overlay** (`deploy/overlays/kind-dev/secrets.env`). It carries only the VNC
+  pair (`CUSTOM_USER`/`PASSWORD`, consumed by the dev image's KasmVNC). `MT5_*`
+  keys are present but **empty**: MT5 logs in from the profile (see "Login
+  profile lifecycle"). The base Deployment declares the ref `optional: true`, so
+  the Talos cluster runs with no such Secret at all.
+* **`mt5-minio`** (talos overlay only) — MinIO credentials for the
+  `fetch-profile` init container: `MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY`. It is
+  never created from a local file: the Talos overlay ships an `ExternalSecret`
+  that materializes it from Vault `secret/mt5`.
 
-`kind-up.sh` creates the overlay's `secrets.env` on first run from that mode's
-`.env` (`dev/.env` for dev, `prod/.env` for prod) by reading
-`MT5_VNC_USER` and `MT5_VNC_PASSWORD` with `grep`/`cut` — the file is never
-`source`d:
+`kind-up.sh` creates `deploy/overlays/kind-dev/secrets.env` on first run from
+`dev/.env` by reading `MT5_VNC_USER` and `MT5_VNC_PASSWORD` with `grep`/`cut` —
+the file is never `source`d:
 
 | secrets.env key | Source `.env` key | Consumed as |
 |---|---|---|
@@ -387,19 +395,18 @@ Every run also rewrites any pre-existing `MT5_*` value to empty, so an old
 command line. `start.sh` then launches MT5 without `/login` arguments and MT5
 auto-logs in from `Config/accounts.dat`.
 
-If the mode's `.env` does not exist either, the script copies
+If `dev/.env` does not exist either, the script copies
 `base/secrets.env.example` to the overlay's `secrets.env`, exits `1` and tells
 you to fill in `CUSTOM_USER`/`PASSWORD`.
 
-Each overlay's `secrets.env` is generated **only when absent**, so dev and prod
-keep independent VNC credentials and re-running `kind-up.sh` never overwrites a
-file you already filled in. Delete `deploy/overlays/<mode>/secrets.env` to
-regenerate it from that mode's `.env`.
+The overlay's `secrets.env` is generated **only when absent**, so re-running
+`kind-up.sh` never overwrites a file you already filled in. Delete
+`deploy/overlays/kind-dev/secrets.env` to regenerate it from `dev/.env`.
 
 Because this checkout is on **exFAT**, which stores no POSIX modes, `chmod 600`
-on those files is a no-op; the script verifies the mode and prints a warning
-instead of pretending the file is private. Do not put production credentials in
-an exFAT checkout.
+on those files is a no-op; the script verifies and prints a warning instead of
+pretending the file is private. Do not put production credentials in an exFAT
+checkout.
 
 Non-secret configuration lives in `ConfigMap mt5-env` in `base/configmap.yaml`:
 `MQL5_GIT_URL`/`MQL5_GIT_REF`, `MINIO_URL`/`MINIO_BUCKET`/
@@ -410,14 +417,14 @@ Non-secret configuration lives in `ConfigMap mt5-env` in `base/configmap.yaml`:
 `LOG_RETENTION_DAYS`, `LOG_RETENTION_INTERVAL`, `HEADLESS`, `WINEPREFIX`,
 `LSIO_NON_ROOT_USER`.
 
-## Homelab (prod) overlay
+## Talos (prod) overlay
 
-`deploy/overlays/homelab` is the same headless workload as `kind-prod`, but
-running on the real single-node Talos cluster (`admin@homelab-cluster`, ~4 CPU /
-~8 GB RAM) instead of kind. It shares the base and the `prod-headless`
-component, so `HEADLESS=true`, the `tini` entrypoint and the lean resources are
-byte-identical to `kind-prod`; only image, storage, secret source and Service
-ports differ.
+`deploy/overlays/talos` is the prod workload — the headless image — running on
+the single-node Talos cluster (`admin@homelab-cluster`, ~4 CPU / ~8 GB RAM).
+This is the only prod environment; the local kind cluster is dev-only. It shares
+the base and the `prod-headless` component, so `HEADLESS=true`, the `tini`
+entrypoint and the lean resources are identical to any other prod render; only
+image, storage, secret source and Service ports are cluster-specific.
 
 **It has not been applied.** Everything below is the procedure for the first
 apply.
@@ -445,8 +452,8 @@ existing tag does not update a running pod (the Deployment is
 
 ### 2. Vault: write the MinIO keys
 
-The homelab overlay has **no `secretGenerator`** and no MT5 credential Secret:
-MT5 logs in from the profile in MinIO, exactly like `kind-prod`.
+The Talos overlay has **no `secretGenerator`** and no MT5 credential Secret:
+MT5 logs in from the profile in MinIO, and dev logs in from its host profile.
 `externalsecret.yaml` asks the external-secrets operator (ClusterSecretStore
 `vault-backend`, the fleet convention) to materialize Secret **`mt5-minio`**,
 which only the `fetch-profile` init container reads. The Vault properties use
@@ -475,7 +482,7 @@ uploaded (see "Copying the login profile to MinIO").
 
 ```bash
 # NOT run yet — this is the manual path.
-kubectl --context admin@homelab-cluster apply -k deploy/overlays/homelab
+kubectl --context admin@homelab-cluster apply -k deploy/overlays/talos
 ```
 
 The overlay creates `Namespace mt5`, `ConfigMap mt5-env`, the Deployment, the
@@ -493,7 +500,7 @@ Fleet convention: app repos are registered in
 so this repo keeps the entry point under `deploy/` and the tfvars value points
 at it). Then `terraform apply` from the infra repo; Flux clones the repo and
 kustomize-builds that one directory, which resolves to
-`deploy/overlays/homelab`. Nothing under `talos/` is modified by this repo.
+`deploy/overlays/talos`. Nothing under `talos/` is modified by this repo.
 
 ### Cluster-specific differences from kind
 
@@ -503,8 +510,8 @@ kustomize-builds that one directory, which resolves to
   EA profile therefore survive pod restarts and rescheduling **on that node**,
   but not node reprovisioning or cluster rebuild.
 * **Service.** Only the `mt5linux` API is published — `NodePort 30801`
-  (`<node-ip>:30801`), the same port the kind overlays use. There is no VNC
-  port: prod is headless. The container still *declares* `containerPort 3000`
+  (`<node-ip>:30801`), the same API port the dev kind cluster uses. There is no
+  VNC port: prod is headless. The container still *declares* `containerPort 3000`
   from base; nothing listens on it.
 * **Resources.** Limits 1 CPU / 1Gi, requests 100m / 256Mi — a deliberate cap on
   a ~8 GB node shared with the rest of the homelab. The image is pulled once
@@ -512,13 +519,13 @@ kustomize-builds that one directory, which resolves to
 * **MQL5.** Unchanged: the `fetch-mql5` init container clones this repo at the
   pinned tag `mql5-v1` (`ConfigMap mt5-env`) into a per-pod `emptyDir`; the
   image carries no MQL5.
-* **Login profile.** The same `fetch-profile` component as `kind-prod`, but
-  `MINIO_URL` is patched to the in-cluster Service
+* **Login profile.** The `fetch-profile` component seeds it, with `MINIO_URL`
+  patched to the in-cluster Service
   `http://minio.minio.svc.cluster.local:9000` (bucket `mt5`, prefix
-  `prod-demo`, unchanged). Credentials come from Vault via the `mt5-minio`
-  `ExternalSecret`, never from a file. Because the PVC starts empty, the first
-  rollout seeds both the Wine prefix and the login profile; MT5 then logs in with
-  no credentials at all.
+  `prod-demo`). Credentials come from Vault via the `mt5-minio` `ExternalSecret`,
+  never from a file. Because the PVC starts empty, the first rollout seeds both
+  the Wine prefix and the login profile; MT5 then logs in with no credentials at
+  all. Dev never touches MinIO.
 * **Namespace.** `Namespace mt5` is part of the render, so the first real apply
   creates it. A `--dry-run=server` run still fails on the namespaced objects
   until it exists (dry-run never persists the namespace), which is expected and
@@ -535,24 +542,24 @@ kustomize-builds that one directory, which resolves to
   `kubectl` access) on the `mt5` namespace. Anyone who can read the PVC, the dev
   host dir (`$MT5_DATA_DIR/profile/dev/Config`) or the MinIO bucket can use the
   account.
-* **MinIO credentials never enter the repo.** The kind path reads
-  `credentials.minio.mt5.json` (gitignored) through a 0600 temp env file and
-  applies Secret `mt5-minio`; no value is printed or committed. The homelab path
-  materializes the same Secret from Vault (`secret/mt5`).
-* **The kind overlays' `secrets.env` sit on exFAT**, where `chmod 600` is a
-  no-op, so those files are readable by any local user who can read the
-  checkout. They now hold only the VNC pair. `kind-up.sh` verifies the mode and
-  warns instead of implying the file is private; keep real credentials out of
-  this checkout (or move `deploy/` to a POSIX filesystem).
-* The KasmVNC UI (dev mode only) is published on host `:3000` with the
+* **MinIO credentials never enter the repo.** The Talos path materializes Secret
+  `mt5-minio` from Vault (`secret/mt5`); no value is printed or committed. The
+  operator's one-time upload uses the gitignored `credentials.minio.mt5.json`
+  with `rclone`, and that file is never applied to a cluster.
+* **The kind overlay's `secrets.env` sits on exFAT**, where `chmod 600` is a
+  no-op, so the file is readable by any local user who can read the checkout. It
+  holds only the VNC pair. `kind-up.sh` verifies and warns instead of implying
+  the file is private; keep real credentials out of this checkout (or move
+  `deploy/` to a POSIX filesystem).
+* The KasmVNC UI (dev only) is published on host `:3000` with the
   `CUSTOM_USER`/`PASSWORD` pair from that file; prod exposes only the mt5linux
-  API on `:8001`, with no authentication of its own.
+  API on `:8001` (`NodePort 30801`), with no authentication of its own.
 
 ## Probes and limits
 
 `start.sh` starts the mt5linux API on 8001 *before* launching MT5, so 8001 is
-the stable readiness signal in both modes (dev's VNC comes up earlier; prod has
-no VNC at all):
+the stable readiness signal in both environments (dev's VNC comes up earlier;
+prod has no VNC at all):
 
 ```yaml
 startupProbe:   tcpSocket 8001  period 10  failureThreshold 120   # 20 min first-boot budget
@@ -588,11 +595,11 @@ if it times out, watch progress with `kubectl -n mt5 logs deploy/mt5 -f`.
   where the unpinned install works. Remove the pin once the dev base image moves
   to Python 3.12+ (or publish a 3.11-compatible mt5linux).
 * **`Deployment/mt5` has two init containers (`seed-prefix` and
-  `prepare-prefix`)** — see "First-boot prefix seeding" and "Cross-mode prefix
-  updates" above. `seed-prefix` exists because a Kubernetes hostPath PV does not
-  get populated from the image the way a Docker named volume did;
-  `prepare-prefix` because the dev and prod images ship different Wine vintages
-  over one shared prefix.
+  `prepare-prefix`)** — see "First-boot prefix seeding" and "Prefix updates
+  after a Wine change" above. `seed-prefix` exists because a Kubernetes hostPath
+  PV/PVC does not get populated from the image the way a Docker named volume
+  did; `prepare-prefix` completes a pending Wine update non-interactively when a
+  prefix predates the image's Wine build.
 * **`deploy/registries.conf` + `CONTAINERS_REGISTRIES_CONF`** — see the
   short-name note above; needed because this host has no
   `/etc/containers/registries.conf`.
@@ -611,10 +618,9 @@ if it times out, watch progress with `kubectl -n mt5 logs deploy/mt5 -f`.
 ```bash
 kubectl kustomize deploy/base                    > /dev/null   # no local secrets needed
 kubectl kustomize deploy/overlays/kind-dev       > /dev/null   # needs overlays/kind-dev/secrets.env
-kubectl kustomize deploy/overlays/kind-prod      > /dev/null   # needs overlays/kind-prod/secrets.env
-kubectl kustomize deploy/overlays/homelab        > /dev/null   # no local secrets needed
+kubectl kustomize deploy/overlays/talos          > /dev/null   # no local secrets needed
 kubectl kustomize deploy/clusters/base           > /dev/null   # Flux entry point
-kubectl --context admin@homelab-cluster apply --dry-run=client -k deploy/overlays/homelab
+kubectl --context admin@homelab-cluster apply --dry-run=client -k deploy/overlays/talos
 bash -n scripts/kind-up.sh && bash -n scripts/kind-down.sh && bash -n scripts/push-image.sh
 ```
 
@@ -627,13 +633,13 @@ kubectl kustomize deploy/overlays/kind-dev \
 kubectl kustomize deploy/overlays/kind-dev | grep -c fetch-profile   # must be 0
 
 # prod: fetch-profile runs LAST (after seed-prefix/prepare-prefix) with the
-# expected bucket/prefix and, on the homelab overlay, the in-cluster endpoint
-kubectl kustomize deploy/overlays/kind-prod | grep -A2 'name: fetch-profile'
-kubectl kustomize deploy/overlays/homelab | grep 'MINIO_URL:'
+# expected bucket/prefix and the in-cluster endpoint
+kubectl kustomize deploy/overlays/talos | grep -A2 'name: fetch-profile'
+kubectl kustomize deploy/overlays/talos | grep 'MINIO_URL:'
 ```
 
-The kind overlays each need their own `secrets.env` (run `kind-up.sh` once for
-that mode, or copy `deploy/base/secrets.env.example` next to the overlay's
-`kustomization.yaml`). `deploy/base` and `deploy/overlays/homelab` render from
-committed files alone — that is the point of keeping the `secretGenerator` out
-of base.
+`deploy/overlays/kind-dev` needs its `secrets.env` (run `kind-up.sh` once, or
+copy `deploy/base/secrets.env.example` next to the overlay's
+`kustomization.yaml`). `deploy/base`, `deploy/overlays/talos` and
+`deploy/clusters/base` render from committed files alone — that is the point of
+keeping the `secretGenerator` out of base.

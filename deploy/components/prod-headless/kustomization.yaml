@@ -2,12 +2,11 @@ apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 
 # "prod" = headless, no VNC, lean resources. Everything a prod overlay must
-# change on top of base lives here, once, so the pod spec cannot drift between
-# the kind overlay and the homelab overlay.
+# change on top of base lives here, once, so the rendered pod spec cannot drift.
 #
 # Opting in is what makes the workload prod; the image itself is pinned by the
-# overlay (localhost/mt5-prod:prod on kind, markram92/mt5-prod:<tag> on the
-# homelab cluster).
+# overlay (markram92/mt5-prod:<tag> on the Talos cluster, the only prod
+# environment — the local kind cluster is dev-only).
 patches:
   # Headless switch. The prod image's entrypoint already runs headless.sh
   # unconditionally; this keeps the rendered pod spec truthful.

@@ -6,9 +6,10 @@ baked into the image at all — MQL5 is cloned from git into the pod at start.
 Configuration is fully dynamic via the `mt5-env` ConfigMap — no rebuild needed
 for a different EA / symbol / timeframe.
 
-It runs on the local kind cluster: `./scripts/kind-up.sh --mode prod` builds
-`localhost/mt5-prod:prod`, loads it into kind and applies
-`deploy/overlays/kind-prod`.
+It is the **prod** image: it runs on the Talos cluster (overlay
+`deploy/overlays/talos`, image `markram92/mt5-prod:<tag>` from Docker Hub). Build
+and push it with `./scripts/push-image.sh <tag>`; the local kind cluster is
+dev-only and never runs this image.
 
 ---
 
@@ -16,40 +17,46 @@ It runs on the local kind cluster: `./scripts/kind-up.sh --mode prod` builds
 
 | | `../dev` | **prod (this)** |
 |---|---|---|
-| Image | `localhost/mt5-dev:dev` (base ~8.8GB) | `localhost/mt5-prod:prod` (base ~2.7GB) |
+| Runs on | local kind cluster | Talos cluster |
+| Image | `localhost/mt5-dev:dev` (base ~8.8GB) | `markram92/mt5-prod:<tag>` (base ~2.7GB) |
 | GUI | KasmVNC on host 3000 | none (headless, no `xdotool`) |
 | mt5linux API | host 8001 | host 8001 |
+| Config source | `deploy/base/configmap.yaml` / `kind-dev` overlay | same base / `talos` overlay |
 | EA auto-start | `startup.ini` written by `start.sh` | same as dev |
 | MQL5 source | git clone at `MQL5_GIT_REF` → pod `emptyDir` | same |
-| Shared prefix | PVC `mt5-prefix` | same PVC |
+| Prefix | host `$MT5_DATA_DIR/prefix` (kind PV) | PVC `mt5-prefix` (Talos `local-path`) |
 
 > Both dev and prod auto-start the EA the same way: `start.sh` writes `startup.ini`
 > (`[StartUp] Expert / Symbol / Period`) before every MT5 launch, and MT5 reads it and
-> attaches the EA itself — no dragging in a GUI. Both modes get the same `mql5/`
+> attaches the EA itself — no dragging in a GUI. Both environments get the same `mql5/`
 > tree (same `MQL5_GIT_REF`), so the EA you test in dev is byte-for-byte the EA prod
 > attaches. The difference is only the runtime: this image is **GUI-free**.
 >
 > `prod/` is a **GUI-free** image: `xdotool` and the VNC/desktop stack are **not
-> installed**. Because the login state persists in the shared prefix PVC (seeded once
-> from dev), MT5 authorizes on boot with no GUI automation. `start.sh` runs its
+> installed**. The MT5 login state arrives as the profile `fetch-profile` copies from
+> MinIO (`mt5/prod-demo/Config`, produced once from the dev host profile), so MT5
+> authorizes on boot with no GUI automation and no credentials. `start.sh` runs its
 > xdotool auto-login block *only* if `xdotool` happens to be present; on prod it is
 > always skipped. Verified 2026-11-16: `expert TestAutoStartEA (EURUSD,H1) loaded
 > successfully` and `OnInit` in `MQL5/logs` on every pod (re)start.
 >
-> **Seed once from dev (per PVC):** the attached-EA/profile/login state that lets
-> headless prod resume on boot comes from the shared prefix PVC. Start the EA once in
-> dev's GUI and close MT5 cleanly so the "running program" state persists; prod then
-> auto-resumes it. A fresh PVC needs that one-time seed.
+> **Prod has its own prefix.** The Talos PVC starts empty and is seeded by
+> `seed-prefix` (Wine prefix from the image) and `fetch-profile` (login `Config` from
+> MinIO) on the first start. Dev and prod do not share storage; they only share the
+> demo account, so do not keep both terminals logged in at once.
 
 ---
 
 ## 2. Quickstart
 
 ```bash
-# Stop dev first — the two must not run together on the shared prefix.
-./scripts/kind-up.sh --mode prod
+# Build + push the image, then apply the Talos overlay (prod runs only there).
+podman login docker.io                          # once
+./scripts/push-image.sh                         # builds prod/, pushes 1.0.0
+# dev and prod use the SAME demo account — stop dev before prod logs in.
+kubectl --context admin@homelab-cluster apply -k deploy/overlays/talos
 
-# Pod: mt5-… | host API port: 8001 | no UI (host 3000 refuses)
+# Pod: mt5-… | API port: 30801 (NodePort) | no UI (no VNC in this image)
 ```
 
 Configuration is **dynamic** — edit `deploy/base/configmap.yaml` (or the overlay
@@ -69,8 +76,9 @@ which is baked into the image).
 | `LOG_RETENTION_INTERVAL` | `86400` | seconds between cleanups (daily) |
 | `COMPANY_ENV` / `COMPANY_REGION` | `production` / `us-east-1` | labels |
 
-Non-secret values go in **ConfigMap `mt5-env`**; credentials go in **Secret
-`mt5-secrets`** (generated from `prod/.env` by `kind-up.sh`). See §6.
+Non-secret values go in **ConfigMap `mt5-env`**; the only credential material is
+the MinIO pair for `fetch-profile`, materialized as Secret **`mt5-minio`** from
+Vault `secret/mt5` by the Talos overlay's `ExternalSecret`. See §6.
 
 ---
 
@@ -90,7 +98,7 @@ git push origin main
 # new tag for a reproducible release:
 git tag -a mql5-v2 -m "MQL5 tree with MyRobot" && git push origin mql5-v2
 # point MQL5_GIT_REF at the new tag, then:
-kubectl apply -k deploy/overlays/kind-prod
+kubectl apply -k deploy/overlays/talos
 kubectl -n mt5 rollout restart deploy/mt5
 ```
 
@@ -110,10 +118,12 @@ Path mapping (repo `mql5/` → wine container):
 
 ### Login / session state
 
-Login + MT5 install + profile live in the shared prefix PVC `mt5-prefix`. Log in
-once (dev), then prod continues on the same prefix. One PVC backs one instance;
-dev and prod must **not** run simultaneously (enforced by `strategy: Recreate` on
-the single Deployment).
+Login + MT5 install + profile live in the prod prefix PVC `mt5-prefix`
+(`local-path` on the Talos node). The PVC starts empty: `seed-prefix` copies the
+image's Wine prefix and `fetch-profile` copies the login `Config` from MinIO
+(`mt5/prod-demo`) on the first start. One PVC backs one instance; dev and prod
+have separate prefixes but share the same demo account, so only one should be
+logged in at a time.
 
 ---
 
@@ -133,7 +143,7 @@ git add -f mql5/Experts/MyRobot.* && git commit -m "Add MyRobot" && git push
 #                               MT5_AUTO_START_SYMBOL: "GBPUSD"
 
 # 3) apply + restart
-kubectl apply -k deploy/overlays/kind-prod
+kubectl apply -k deploy/overlays/talos
 kubectl -n mt5 rollout restart deploy/mt5
 ```
 
@@ -182,26 +192,28 @@ see §7.
 ## 5. Common commands
 
 ```bash
-./scripts/kind-up.sh --mode prod              # build + load + apply + wait
+./scripts/push-image.sh                       # build prod/ + push tag 1.0.0
+kubectl --context admin@homelab-cluster apply -k deploy/overlays/talos
 kubectl -n mt5 get pods                       # Ready 1/1
 kubectl -n mt5 logs -f deploy/mt5             # all logs on stdout
 kubectl -n mt5 logs deploy/mt5 -c fetch-mql5  # which MQL5 tree was cloned
 kubectl -n mt5 rollout restart deploy/mt5     # apply ConfigMap/tag changes
 
-# stop dev before running prod (shared prefix):
-./scripts/kind-up.sh --mode prod              # recreates the single pod
+# same demo account as dev — stop the dev pod before prod logs in:
+kubectl --context kind-mt5 rollout scale deploy/mt5 --replicas=0
 ```
 
 ---
 
 ## 6. Configuration in the cluster
 
-- Env (`MT5_AUTO_START_*`, `ENABLE_MT5LINUX_API`, `MQL5_GIT_*`) → **ConfigMap `mt5-env`**
-  (`deploy/base/configmap.yaml`)
-- Credentials (`MT5_ACCOUNT/PASSWORD/SERVER`, VNC user/password) → **Secret
-  `mt5-secrets`**, generated by `kind-up.sh` from `prod/.env`
-- Mode differences (image, `HEADLESS`, entrypoint, resources) → the overlay in
-  `deploy/overlays/kind-prod`
+- Env (`MT5_AUTO_START_*`, `ENABLE_MT5LINUX_API`, `MQL5_GIT_*`, `MINIO_*`) →
+  **ConfigMap `mt5-env`** (`deploy/base/configmap.yaml`)
+- MinIO credentials for `fetch-profile` → **Secret `mt5-minio`**, materialized
+  from Vault `secret/mt5` by the overlay's `ExternalSecret` (no local file, no
+  `MT5_*` credentials at all: login comes from the seeded profile)
+- Prod deltas (image, `HEADLESS`, entrypoint, resources) → the shared
+  `prod-headless` component, pinned by the overlay in `deploy/overlays/talos`
 - MQL5 / data → cloned from git at start; runtime writes stay in the pod's
   `emptyDir` and disappear with it
 

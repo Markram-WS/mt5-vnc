@@ -1,4 +1,4 @@
-# dev mode: the MT5 login profile comes from the HOST, not from credentials in
+# dev: the MT5 login profile comes from the HOST, not from credentials in
 # the environment.
 #
 # The directory below is on the kind node (extraMount of @DATA_DIR@ ->

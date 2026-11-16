@@ -1,7 +1,7 @@
 # Troubleshooting - MT5 Dev Environment
 
 Common issues, root causes, and fixes for the MT5 dev pod (`mt5` in namespace `mt5`,
-run with `./scripts/kind-up.sh --mode dev`).
+run with `./scripts/kind-up.sh`).
 
 ## 1. EA logs not appearing in `kubectl -n mt5 logs deploy/mt5`
 
@@ -119,7 +119,7 @@ Verified empirically on build 6090 under Wine:
 
 ```bash
 # Rebuild the image and re-apply the overlay, keeping the prefix PVC
-./scripts/kind-up.sh --mode dev
+./scripts/kind-up.sh
 
 # Or just recreate the pod (same image, same prefix, fresh MQL5 clone)
 kubectl -n mt5 delete pod -l app.kubernetes.io/name=mt5

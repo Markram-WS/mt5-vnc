@@ -2,10 +2,10 @@
 
 MetaTrader 5 dev image: KasmVNC UI on port 3000 plus the mt5linux API on 8001,
 with mt5linux enable/disable toggle, configurable MT5 auto-login credentials,
-company environment labels, and comprehensive log monitoring. It is built and
-run **on the local kind cluster** — `./scripts/kind-up.sh --mode dev` builds
-`localhost/mt5-dev:dev`, loads it into kind and applies
-`deploy/overlays/kind-dev`; there is no compose path any more.
+company environment labels, and comprehensive log monitoring. It is the **dev**
+image and runs **on the local kind cluster** (dev-only) —
+`./scripts/kind-up.sh` builds `localhost/mt5-dev:dev`, loads it into kind and
+applies `deploy/overlays/kind-dev`; there is no compose path any more.
 
 ## Features
 
@@ -18,7 +18,7 @@ run **on the local kind cluster** — `./scripts/kind-up.sh --mode dev` builds
 - **EA Auto-Start**: `startup.ini` (`Expert`/`Symbol`/`Period`) is written by `start.sh` before every MT5 launch into both the AppData terminal dir and the portable-mode install root. MT5 build 6090 reads it and attaches the EA to a chart on boot — verified across restarts/rebuilds (see TROUBLESHOOT §3)
 - **All Logs on STDOUT**: `init-mt5` runs as an s6 longrun service and execs `start.sh` in the foreground — every log (install, launch, mt5linux, monitor) appears in `kubectl -n mt5 logs -f deploy/mt5`
 - **MQL5 Tree**: the pod clones the repo at `MQL5_GIT_REF` into an `emptyDir` mounted at `/opt/mt5/drive_c/Program Files/MetaTrader 5/MQL5/` (EAs, indicators, scripts)
-- **Wine Prefix**: PVC `mt5-prefix` → `/opt/mt5/` (persists the entire Wine prefix — MT5 install, profile, session — across pod restarts and mode switches)
+- **Wine Prefix**: PVC `mt5-prefix` → `/opt/mt5/` (persists the entire Wine prefix — MT5 install, profile, session — across pod restarts)
 - **MT5 LiveUpdate Blocked**: `update.mql5.com` / `updates.mql5.com` → `127.0.0.1` via the pod's `hostAliases` + a `start.sh` fallback
 
 ## Configuration
@@ -214,7 +214,7 @@ kubectl -n mt5 rollout restart deploy/mt5
 ### Bring it up
 
 ```bash
-./scripts/kind-up.sh --mode dev     # build + load + apply + wait for Ready
+./scripts/kind-up.sh                # build + load + apply + wait for Ready
 ```
 
 ### Dev Mode Verification
@@ -237,7 +237,7 @@ Set `ENABLE_MT5LINUX_API: "false"` in the ConfigMap, re-apply the overlay and
 restart; 8001 then refuses connections:
 
 ```bash
-./scripts/kind-up.sh --mode dev
+./scripts/kind-up.sh
 curl -s -m 3 http://localhost:8001/ && echo "ERROR: API running" || echo "OK: API disabled"
 ```
 

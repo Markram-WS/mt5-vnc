@@ -11,6 +11,6 @@ resources:
 
 # No secretGenerator here on purpose: the base must render from the committed
 # files alone, so it can parent overlays that get their credentials elsewhere
-# (ExternalSecret on the homelab cluster). Each kind overlay generates
+# (ExternalSecret on the Talos cluster). Each kind overlay generates
 # mt5-secrets from its own secrets.env, written there by scripts/kind-up.sh from
-# the selected mode's .env (never committed, mode 0600).
+# dev/.env (never committed, mode 0600).

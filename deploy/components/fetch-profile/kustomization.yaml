@@ -23,8 +23,8 @@ kind: Component
 # speaks the same S3/MinIO API — and it is already the client the operator uses
 # for the one-time upload, so the repo keeps one MinIO vocabulary.
 #
-# Opted into by prod overlays only (kind-prod, homelab); the dev overlay mounts
-# the host Config directory instead.
+# Opted into by the prod overlay only (deploy/overlays/talos); the dev overlay
+# mounts the host Config directory instead.
 patches:
   # JSON patch (not strategic merge): it APPENDS fetch-profile after
   # seed-prefix/prepare-prefix. Order matters — the one-time image seed must

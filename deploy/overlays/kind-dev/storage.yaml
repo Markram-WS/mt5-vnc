@@ -7,8 +7,7 @@
 # Wine needs real UNIX symlinks in the prefix; exFAT breaks it, see the dev
 # Dockerfile comment).
 #
-# The same PV/PVC is used by kind-prod (one PV, one PVC, one Deployment), so a
-# mode switch never re-creates the prefix.
+# The dev cluster uses this one PV/PVC (one PV, one PVC, one Deployment).
 apiVersion: v1
 kind: PersistentVolume
 metadata:

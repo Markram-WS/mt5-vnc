@@ -33,7 +33,7 @@ if kind get clusters 2>/dev/null | grep -qx "$CLUSTER_NAME"; then
     echo "==> Deleting kind cluster '$CLUSTER_NAME'"
     kind delete cluster --name "$CLUSTER_NAME"
     echo "Removed kind cluster '$CLUSTER_NAME' (containers, node images, and cluster state)."
-    echo "Kept: images localhost/mt5-dev:dev and localhost/mt5-prod:prod."
+    echo "Kept: image localhost/mt5-dev:dev (prod runs on Talos from the registry image)."
     echo "Kept: Wine prefix data dir '$DATA_DIR'."
 else
     echo "Kind cluster '$CLUSTER_NAME' does not exist; nothing to remove."

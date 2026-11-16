@@ -1,8 +1,9 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# prod on the homelab cluster (single-node Talos, real Docker Hub image).
-# NOT applied yet: see deploy/README.md, "Homelab (prod) overlay".
+# PROD: the Talos cluster (single node, real Docker Hub image). This is the only
+# prod deployment — the local kind cluster is dev-only (deploy/overlays/kind-dev).
+# NOT applied yet: see deploy/README.md, "Talos (prod) overlay".
 namespace: mt5
 
 resources:
@@ -10,10 +11,10 @@ resources:
   - storage.yaml
   - externalsecret.yaml
 
-# Same prod deltas as kind-prod (HEADLESS=true, tini entrypoint, lean
-# resources), plus the same fetch-profile component. No kind-nodeports
-# component: the homelab cluster has no kind port mappings, and this overlay
-# publishes only the API.
+# The prod deltas (HEADLESS=true, tini entrypoint, lean resources) come from the
+# shared prod-headless component, plus the fetch-profile init container that
+# seeds the login profile from MinIO. No kind-nodeports component: Talos has no
+# kind port mappings, and this overlay publishes only the API.
 components:
   - ../../components/prod-headless
   - ../../components/fetch-profile
@@ -24,8 +25,8 @@ images:
     newTag: 1.0.0
 
 patches:
-  # MinIO is in-cluster on the homelab cluster: use the Service DNS name instead
-  # of the tailnet endpoint the kind overlays use (same bucket/prefix).
+  # MinIO runs in-cluster on Talos: use the Service DNS name instead of the
+  # tailnet endpoint in the base ConfigMap (same bucket/prefix).
   - target:
       kind: ConfigMap
       name: mt5-env
@@ -35,8 +36,7 @@ patches:
         value: http://minio.minio.svc.cluster.local:9000
 
   # The Service keeps ONLY the mt5linux API: prod is headless, so there is no
-  # VNC port to publish. 30801 matches the port the kind overlays use, so the
-  # client side stays the same across clusters.
+  # VNC port to publish. 30801 is the API port the client side already uses.
   - target:
       kind: Service
       name: mt5

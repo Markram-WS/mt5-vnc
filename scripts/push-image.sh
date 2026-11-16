@@ -3,9 +3,10 @@
 #
 #   ./scripts/push-image.sh [TAG] [--build-only]    # TAG defaults to 1.0.0
 #
-# The tag is the release contract for the homelab overlay: deploy/overlays/homelab
-# pins markram92/mt5-prod:<tag>, so pushing a new tag means editing that overlay
-# (or re-pushing the same tag and restarting the pod).
+# The tag is the release contract for the Talos prod overlay:
+# deploy/overlays/talos pins markram92/mt5-prod:<tag>, so pushing a new tag means
+# editing that overlay (or re-pushing the same tag and restarting the pod). This
+# is the only prod image; the local kind cluster runs dev only.
 #
 # Credentials: the push uses the podman login store
 # ($REGISTRY_AUTH_FILE, default ~/.config/containers/auth.json). Nothing here
@@ -175,5 +176,5 @@ podman push "$IMAGE"
 
 echo ""
 echo "==> Pushed $IMAGE"
-echo "    deploy/overlays/homelab pins markram92/mt5-prod:1.0.0 — keep the tag in"
+echo "    deploy/overlays/talos pins markram92/mt5-prod:1.0.0 — keep the tag in"
 echo "    sync with what was just pushed before applying the overlay."

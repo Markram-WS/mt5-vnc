@@ -1,27 +1,25 @@
 #!/usr/bin/env bash
-# Bring up the mt5 kind cluster and deploy one mode of MT5 onto it.
+# Bring up the local mt5 kind cluster and deploy the DEV workload onto it.
 #
-#   ./scripts/kind-up.sh [--mode dev|prod]     # default: dev
+#   ./scripts/kind-up.sh
 #
-# dev  -> image localhost/mt5-dev:dev   (gmag11 base, KasmVNC UI on :3000, HEADLESS=false)
-# prod -> image localhost/mt5-prod:prod (tobix/wine base, headless, HEADLESS=true)
+# The local kind cluster is DEV ONLY: image localhost/mt5-dev:dev (gmag11 base,
+# KasmVNC UI on :3000, HEADLESS=false) applied from deploy/overlays/kind-dev.
+# Prod does not run here at all — it runs on the Talos cluster from
+# deploy/overlays/talos with the published markram92/mt5-prod image.
 #
-# The two modes are mutually exclusive and share ONE Deployment named mt5 plus
-# one Wine-prefix PVC, so switching is just a re-run with the other --mode: the
-# Recreate strategy tears the old pod down before the new one starts.
+# Both environments use the same demo account (26435893 on VantageMarkets-Demo),
+# but dev logs in from the HOST-mounted profile ($MT5_DATA_DIR/profile/dev/Config)
+# and needs no MinIO, while prod seeds the same profile from MinIO once.
 set -euo pipefail
-
-# Saved before the option parser consumes "$@": the delegated-scope re-exec
-# below happens after parsing, so it must forward the ORIGINAL arguments (a
-# re-exec with the drained "$@" silently falls back to the default mode).
-ORIGINAL_ARGS=("$@")
 
 usage() {
     cat <<'EOF'
-Usage: ./scripts/kind-up.sh [--mode dev|prod]
+Usage: ./scripts/kind-up.sh [-h|--help]
 
-  --mode dev    (default) VNC build, reachable at http://localhost:3000
-  --mode prod   headless build, API at localhost:8001
+Brings up (if needed) the local kind cluster, builds localhost/mt5-dev:dev from
+dev/, loads it into the node and applies deploy/overlays/kind-dev. There is no
+mode switch: this cluster runs dev only.
 
 Environment:
   MT5_DATA_DIR        host directory for the Wine prefix (default: $HOME/mt5-data)
@@ -29,34 +27,19 @@ Environment:
 EOF
 }
 
-MODE=dev
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --mode)
-            [ "$#" -ge 2 ] || { echo "ERROR: --mode needs a value (dev|prod)" >&2; exit 2; }
-            MODE="$2"
-            shift 2
-            ;;
-        --mode=*)
-            MODE="${1#*=}"
-            shift
-            ;;
         -h|--help)
             usage
             exit 0
             ;;
         *)
-            echo "ERROR: unknown argument: $1" >&2
+            echo "ERROR: unknown argument: $1 (this script takes no options; the kind cluster is dev-only)" >&2
             usage >&2
             exit 2
             ;;
     esac
 done
-
-case "$MODE" in
-    dev|prod) ;;
-    *) echo "ERROR: --mode must be 'dev' or 'prod' (got '$MODE')" >&2; exit 2 ;;
-esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -66,7 +49,7 @@ cd "$REPO_ROOT"
 if [ -z "${KIND_IN_DELEGATED_SCOPE:-}" ] && [ "$(id -u)" -ne 0 ]; then
     export KIND_IN_DELEGATED_SCOPE=1
     if command -v systemd-run >/dev/null 2>&1; then
-        exec systemd-run --user --scope --quiet --collect --property=Delegate=yes -- "$0" "${ORIGINAL_ARGS[@]}"
+        exec systemd-run --user --scope --quiet --collect --property=Delegate=yes -- "$0" "$@"
     fi
     echo "ERROR: rootless kind needs a delegated systemd scope and systemd-run is missing." >&2
     echo "       Either install systemd, or create /etc/systemd/user@.service.d/delegate.conf with [Service] Delegate=yes" >&2
@@ -81,36 +64,23 @@ DATA_DIR="${MT5_DATA_DIR:-$HOME/mt5-data}"
 # UNIX symlinks, which exFAT cannot store (the repo itself is on exFAT).
 DATA_DIR="${DATA_DIR%/}"
 
+IMAGE="localhost/mt5-dev:dev"
+BUILD_CONTEXT="dev"
+OVERLAY="deploy/overlays/kind-dev"
+ENV_FILE="dev/.env"
+
 # dev login profile: the host directory mounted (read-write) over the terminal's
-# Config dir in dev mode. It is inside $DATA_DIR, which the kind node already
-# extraMounts at /var/lib/mt5, so adding it needs no cluster recreation. MT5
-# writes accounts.dat/servers.dat here on login; this is also the exact tree the
+# Config dir. It is inside $DATA_DIR, which the kind node already extraMounts at
+# /var/lib/mt5, so adding it needs no cluster recreation. MT5 writes
+# accounts.dat/servers.dat here on login; this is also the exact tree the
 # operator copies to MinIO for prod to seed from (deploy/README.md).
 PROFILE_DEV_DIR="$DATA_DIR/profile/dev/Config"
 PREFIX_PROFILE_DIR="$DATA_DIR/prefix/drive_c/Program Files/MetaTrader 5/Config"
-# MinIO credentials for prod's fetch-profile init container. Gitignored and never
-# printed; the Secret is generated from it, not from the repo.
-MINIO_CREDENTIALS="${MT5_MINIO_CREDENTIALS:-$REPO_ROOT/credentials.minio.mt5.json}"
-
-case "$MODE" in
-    dev)
-        IMAGE="localhost/mt5-dev:dev"
-        BUILD_CONTEXT="dev"
-        OVERLAY="deploy/overlays/kind-dev"
-        ENV_FILE="dev/.env"
-        ;;
-    prod)
-        IMAGE="localhost/mt5-prod:prod"
-        BUILD_CONTEXT="prod"
-        OVERLAY="deploy/overlays/kind-prod"
-        ENV_FILE="prod/.env"
-        ;;
-esac
 
 # The secret is generated INSIDE the overlay: kustomize refuses an env file that
 # lies outside the kustomization root ("security; file ... is not in or below"),
-# so each overlay owns its own deploy/overlays/<mode>/secrets.env. Keeping it
-# out of base/ is what lets base — and the homelab overlay — render without any
+# so the overlay owns its own deploy/overlays/kind-dev/secrets.env. Keeping it
+# out of base/ is what lets base — and the talos overlay — render without any
 # local secret file.
 SECRETS_FILE="$OVERLAY/secrets.env"
 
@@ -124,12 +94,11 @@ trap 'echo "ERROR: command failed on line $LINENO: $BASH_COMMAND" >&2' ERR
 cleanup() {
     rm -f "$RENDERED_CONFIG"
     rm -f "${IMAGE_TMPDIR}"/kind-image-*.tar
-    rm -f "${TMPDIR:-/tmp}"/mt5-minio.??????
-    rm -rf "${TMPDIR:-/tmp}"/kind-build-mt5-dev "${TMPDIR:-/tmp}"/kind-build-mt5-prod
+    rm -rf "${TMPDIR:-/tmp}"/kind-build-mt5-dev
 }
 trap 'status=$?; cleanup; exit $status' EXIT
 
-echo "==> Mode: $MODE (image $IMAGE)"
+echo "==> Image: $IMAGE (dev overlay $OVERLAY)"
 
 echo "==> Checking required tools"
 missing=()
@@ -193,25 +162,13 @@ env_value() {
     printf '%s' "$line"
 }
 
-# Read one key out of a JSON file without printing it (jq preferred, python3 as
-# a fallback). Used only for the MinIO credential file.
-json_value() {
-    local file="$1" key="$2"
-    if command -v jq >/dev/null 2>&1; then
-        jq -er --arg k "$key" '.[$k]' "$file"
-    else
-        python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$file" "$key"
-    fi
-}
-
-# Credentials for this mode's overlay. Never printed, never committed: the file
-# is written mode 0600 (best effort on exFAT) from the mode's .env, and only
-# when it does not exist yet — a later run of the other mode keeps its own file.
+# Credentials for the dev overlay. Never printed, never committed: the file is
+# written mode 0600 (best effort on exFAT) from dev/.env, and only when it does
+# not exist yet.
 #
-# MT5 no longer takes credentials from the environment in EITHER mode: dev logs
-# in from the host-mounted Config directory, prod seeds it from MinIO
-# (fetch-profile). The MT5_* keys therefore stay empty; only the VNC pair
-# (CUSTOM_USER/PASSWORD) is a real secret here.
+# MT5 does not take credentials from the environment: dev logs in from the
+# host-mounted Config directory. The MT5_* keys therefore stay empty; only the
+# VNC pair (CUSTOM_USER/PASSWORD) is a real secret here.
 echo "==> Checking $SECRETS_FILE"
 if [ ! -f "$SECRETS_FILE" ]; then
     if [ ! -f "$ENV_FILE" ]; then
@@ -260,12 +217,8 @@ blank_mt5_keys() {
     rm -f "$tmp"
 }
 blank_mt5_keys "$SECRETS_FILE"
-if [ "$MODE" = dev ]; then
-    echo "==> dev logs in from the mounted profile at $PROFILE_DEV_DIR (MT5_* env is empty)."
-    echo "    Log in manually via VNC only when that profile is first created."
-else
-    echo "==> prod logs in from the profile seeded by fetch-profile (MT5_* env is empty)."
-fi
+echo "==> dev logs in from the mounted profile at $PROFILE_DEV_DIR (MT5_* env is empty)."
+echo "    Log in manually via VNC only when that profile is first created."
 
 echo "==> Ensuring prefix data dir '$DATA_DIR' exists"
 mkdir -p "$DATA_DIR/prefix"
@@ -276,7 +229,7 @@ mkdir -p "$DATA_DIR/prefix"
 # the whole prefix) when it is still empty; after that MT5 owns it.
 echo "==> Ensuring dev login-profile dir '$PROFILE_DEV_DIR' exists"
 mkdir -p "$PROFILE_DEV_DIR"
-if [ "$MODE" = dev ] && [ -z "$(find "$PROFILE_DEV_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+if [ -z "$(find "$PROFILE_DEV_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
     if [ -d "$PREFIX_PROFILE_DIR" ]; then
         echo "==> Seeding the empty dev profile dir from the prefix Config file set"
         cp -a "$PREFIX_PROFILE_DIR"/. "$PROFILE_DEV_DIR"/
@@ -297,7 +250,7 @@ else
 fi
 
 echo "==> Building $IMAGE from $BUILD_CONTEXT/"
-BUILD_CTX="$(stage_context "$BUILD_CONTEXT" "mt5-$MODE")"
+BUILD_CTX="$(stage_context "$BUILD_CONTEXT" "mt5-dev")"
 podman build -t "$IMAGE" "$BUILD_CTX"
 
 load_image "$IMAGE"
@@ -312,29 +265,6 @@ podman exec "$NODE_NAME" crictl images "$IMAGE"
 
 echo "==> Applying kustomize overlay $OVERLAY"
 kubectl apply -k "$OVERLAY"
-
-# The fetch-profile init container reads MinIO credentials from Secret
-# mt5-minio (kind-prod has no ExternalSecret). Generated from the gitignored
-# credentials JSON through a mode-0600 temp env file, so no value ever appears on
-# a command line or in this script's output; the file is removed right after.
-if [ "$MODE" = prod ]; then
-    if [ ! -f "$MINIO_CREDENTIALS" ]; then
-        echo "ERROR: $MINIO_CREDENTIALS is missing; fetch-profile needs the MinIO credentials." >&2
-        echo "       It holds url/accessKey/secretKey and is gitignored (never commit it)." >&2
-        exit 1
-    fi
-    echo "==> Materializing Secret mt5-minio from $MINIO_CREDENTIALS"
-    minio_env="$(mktemp "${TMPDIR:-/tmp}/mt5-minio.XXXXXX")"
-    (
-        umask 077
-        printf 'MINIO_ACCESS_KEY=%s\n' "$(json_value "$MINIO_CREDENTIALS" accessKey)"
-        printf 'MINIO_SECRET_KEY=%s\n' "$(json_value "$MINIO_CREDENTIALS" secretKey)"
-    ) > "$minio_env"
-    kubectl -n mt5 create secret generic mt5-minio \
-        --from-env-file="$minio_env" \
-        --dry-run=client -o yaml | kubectl apply -f -
-    rm -f "$minio_env"
-fi
 
 echo "==> Enforcing single-Deployment exclusivity"
 deployments="$(kubectl -n mt5 get deployment -o name | sort)"
@@ -351,23 +281,14 @@ echo "==> Waiting for PVC mt5-prefix to bind"
 kubectl -n mt5 wait --for=jsonpath='{.status.phase}'=Bound pvc/mt5-prefix --timeout=120s
 
 echo "==> Waiting for the pod to become Ready (first boot installs MT5 inside the pod; this can take many minutes)"
-# `rollout status` tracks the NEW ReplicaSet only, so it cannot be satisfied by
-# the previous mode's still-Ready pod. It works here because the Deployment sets
-# progressDeadlineSeconds: 1800 (the 600s default would be shorter than a cold
-# MT5 install).
+# The Deployment sets progressDeadlineSeconds: 1800 (the 600s default would be
+# shorter than a cold MT5 install).
 kubectl -n mt5 rollout status deployment/mt5 --timeout=1800s
 
 echo ""
-echo "==> Done ($MODE mode)"
+echo "==> Done (dev on kind)"
 kubectl -n mt5 get pods,pvc
 echo ""
-case "$MODE" in
-    dev)
-        echo "KasmVNC UI:    http://localhost:3000  (user/password from $SECRETS_FILE)"
-        echo "mt5linux API:  localhost:8001"
-        ;;
-    prod)
-        echo "Headless:      no UI. mt5linux API: localhost:8001"
-        echo "Logs:          kubectl -n mt5 logs deploy/mt5 -f"
-        ;;
-esac
+echo "KasmVNC UI:    http://localhost:3000  (user/password from $SECRETS_FILE)"
+echo "mt5linux API:  localhost:8001"
+echo "Prod runs on the Talos cluster (deploy/overlays/talos), never here."

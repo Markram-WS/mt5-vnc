@@ -19,23 +19,24 @@ Two deployments, both running the **same MetaTrader 5** install and EA:
 | Purpose | author / configure / test | replicate, run headless, deploy |
 
 Both auto-start the EA via **`startup.ini`**, not GUI dragging. `prod/` replicates
-dev's **behavior** with a thin, headless, minimal image.
+dev's **behavior** with a thin, headless, minimal image. Dev runs on the local
+kind cluster; prod runs on the Talos cluster.
 
 ```
             ┌──────────────────────────────────┐
-            │  kind node (mt5-control-plane)   │
-            │  hostPort 8001 → nodePort 30801  │
+            │  Talos node                      │
+            │  NodePort 30801 → container 8001 │
             └─────────────┬────────────────────┘
                           │
-              ┌───────────┴────────────┐
-              │  pod mt5 (1 replica)    │
-              │  localhost/mt5-prod:prod│
-              │  init: fetch-mql5 →     │
-              │        emptyDir /mql5   │
-              └───────────┬────────────┘
+              ┌───────────┴────────────────────┐
+              │  pod mt5 (1 replica)            │
+              │  markram92/mt5-prod:<tag>       │
+              │  init: fetch-mql5 →             │
+              │        emptyDir /mql5           │
+              └───────────┬────────────────────┘
                           │
         ┌─────────────────┴──────────────────┐
-        │  PVC mt5-prefix (hostPath in node)  │
+        │  PVC mt5-prefix (local-path)        │
         │  * wine prefix /opt/mt5             │
         │  * METATRADER install + programs     │
         │  * login (authorized) state          │
@@ -43,9 +44,10 @@ dev's **behavior** with a thin, headless, minimal image.
         └──────────────────────────────────────┘
 ```
 
-The prefix is **shared** (one PVC, one instance). The **same** PVC backs both dev
-and prod. dev and prod **must not** run simultaneously on the same prefix —
-`strategy: Recreate` enforces that.
+The prefix is **single-writer**: one PVC, one instance, `strategy: Recreate`.
+Prod has its **own** prefix on the Talos node — it is not shared with the kind/dev
+host prefix. Both environments do use the same demo account, so they must not be
+logged in simultaneously.
 
 ---
 
@@ -72,8 +74,10 @@ tini
            └─ monitor-mt5-logs.sh  (tail → stdout)    (backgrounded)
 ```
 
-**Key point:** on the shared prefix PVC the MT5 install + login already exist, so steps
-[1]–[4] no-op and MT5 *resumes* the persisted session without a GUI.
+**Key point:** once the prod PVC has been seeded (`seed-prefix` copies the image's
+Wine prefix on first start, `fetch-profile` copies the login `Config` from MinIO),
+the MT5 install + login already exist, so steps [1]–[4] no-op and MT5 *resumes*
+the persisted session without a GUI.
 
 ---
 
@@ -90,8 +94,8 @@ The EA is attached by **MT5 itself** at launch (build 6090) — no GUI automatio
    ```
    Written to **two** locations: the install root *and* the terminal UUID dir.
 2. MT5 reads `startup.ini` at boot → opens the chart → attaches the EA.
-3. Data/session persistence lives in the shared prefix PVC, so the seed persisted in dev's
-   GUI carries over to the same PVC in prod.
+3. Data/session persistence lives in the prod prefix PVC; the login `Config` it
+   starts from is the profile the operator copied from dev to MinIO once.
 
 ```
 MT5_AUTO_START_EA            ┌──────────────────────────────┐
@@ -113,7 +117,7 @@ MT5_AUTO_START_PERIOD        │   writes startup.ini          │
 ```
 prod/
 ├── Dockerfile                  # thin base + deps + scripts baked in
-├── .env / .env.example         # credentials source for Secret mt5-secrets
+├── .env / .env.example         # local build inputs only (never applied to a cluster)
 ├── README.md
 ├── ARCHITECTURE.md             # (this)
 └── Metatrader/
@@ -136,7 +140,7 @@ mql5/                          # repo-root tree, cloned into the pod at MQL5_GIT
 | Source | Container path | Note |
 |---|---|---|
 | `emptyDir`, filled by init container `fetch-mql5` (git clone at `MQL5_GIT_REF`) | `…/MetaTrader 5/MQL5/` | per-pod MQL5 tree; runtime writes die with the pod |
-| PVC `mt5-prefix` (hostPath `/var/lib/mt5/prefix` in the node) | `/opt/mt5/` | the whole Wine prefix, shared with dev |
+| PVC `mt5-prefix` (`StorageClass local-path`, node-local volume) | `/opt/mt5/` | the whole Wine prefix on the Talos node; seeded once from the image, login `Config` from MinIO |
 
 ---
 
@@ -162,7 +166,7 @@ and system activity without exec-ing in.
 - `mt5linux` runs on the **Linux side** (installed via pip in the image), not inside
   Wine. It talks to the Windows MT5 terminal through the `MetaTrader5` Python library
   (installed into Wine Python) over the Wine network/pipe bridge.
-- port **8001** (in-container), host **8001** (kind maps host 8001 → node 30801).
+- port **8001** (in-container), published as `NodePort 30801` on the Talos node.
 - Controlled by `ENABLE_MT5LINUX_API=true`.
 - Used by external code to query markets / send orders through the MT5 account.
 
@@ -170,12 +174,14 @@ and system activity without exec-ing in.
 
 ## 8. Config mapping
 
-| `prod/.env` (credentials, → Secret `mt5-secrets`) | ConfigMap `mt5-env` |
+| MinIO credentials (`ExternalSecret mt5-minio` from Vault `secret/mt5`) | ConfigMap `mt5-env` |
 |---|---|
-| `MT5_SERVER`, `MT5_ACCOUNT`, `MT5_PASSWORD` | `MT5_AUTO_START_EA/SYMBOL/PERIOD`, `ENABLE_MT5LINUX_API`, `MQL5_GIT_URL/REF` |
+| `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` | `MT5_AUTO_START_EA/SYMBOL/PERIOD`, `ENABLE_MT5LINUX_API`, `MQL5_GIT_URL/REF`, `MINIO_URL/BUCKET/PROFILE_PREFIX` |
 
-`kind-up.sh` builds the Secret from `prod/.env` on first run; everything else
-non-secret lives in `deploy/base/configmap.yaml`.
+There are no MT5 credentials in the environment on either side: prod logs in from
+the profile `fetch-profile` seeds from MinIO, and dev from its host-mounted
+profile. Everything non-secret lives in `deploy/base/configmap.yaml`; the Talos
+overlay patches `MINIO_URL` to the in-cluster Service.
 
 ---
 
@@ -193,7 +199,7 @@ non-secret lives in `deploy/base/configmap.yaml`.
 
 - The prefix PVC `mt5-prefix` is the single writable state; a second instance would
   need its own PVC.
-- ConfigMap `mt5-env` / Secret `mt5-secrets` are the only injection points; `.env`
-  files exist solely as the credentials source for `kind-up.sh`.
+- ConfigMap `mt5-env` and the `ExternalSecret`/`Secret mt5-minio` are the only
+  injection points; `.env` files are inputs for local builds, not cluster config.
 - A future artifact store could serve the MQL5 archive instead of a `git clone` at
   pod start (the init container is the only seam that would change).
