@@ -92,7 +92,7 @@ The same prod workload is prepared for the homelab Talos cluster as
 credentials via `ExternalSecret`, `local-path` PVC, API on NodePort `30801`) and
 is **not applied yet**. The registry push (`podman login docker.io` then
 `./scripts/push-image.sh <tag>`), the two Vault properties under `secret/mt5`
-(`minio_accessKey`, `minio_secretKey`), the manual apply and the Flux
+(`MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`), the manual apply and the Flux
 registration are all documented in
 [deploy/README.md](deploy/README.md#homelab-prod-overlay).
 

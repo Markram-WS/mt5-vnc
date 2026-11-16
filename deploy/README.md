@@ -449,18 +449,19 @@ The homelab overlay has **no `secretGenerator`** and no MT5 credential Secret:
 MT5 logs in from the profile in MinIO, exactly like `kind-prod`.
 `externalsecret.yaml` asks the external-secrets operator (ClusterSecretStore
 `vault-backend`, the fleet convention) to materialize Secret **`mt5-minio`**,
-which only the `fetch-profile` init container reads:
+which only the `fetch-profile` init container reads. The Vault properties use
+the same names as the Secret keys:
 
 | Secret key | Vault property | consumer |
 |---|---|---|
-| `MINIO_ACCESS_KEY` | `minio_accessKey` | `fetch-profile` → `RCLONE_CONFIG_SRC_ACCESS_KEY_ID` |
-| `MINIO_SECRET_KEY` | `minio_secretKey` | `fetch-profile` → `RCLONE_CONFIG_SRC_SECRET_ACCESS_KEY` |
+| `MINIO_ACCESS_KEY` | `MINIO_ACCESS_KEY` | `fetch-profile` → `RCLONE_CONFIG_SRC_ACCESS_KEY_ID` |
+| `MINIO_SECRET_KEY` | `MINIO_SECRET_KEY` | `fetch-profile` → `RCLONE_CONFIG_SRC_SECRET_ACCESS_KEY` |
 
 Vault KV v2 path: **`secret/mt5`** (API path `/v1/secret/data/mt5`),
 `refreshInterval: 1h`. Write it before applying:
 
 ```bash
-vault kv put secret/mt5 minio_accessKey=... minio_secretKey=...
+vault kv put secret/mt5 MINIO_ACCESS_KEY=... MINIO_SECRET_KEY=...
 ```
 
 Until the path exists, the ExternalSecret reports `SecretSyncedError` and the
