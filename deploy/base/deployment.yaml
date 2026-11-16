@@ -73,7 +73,7 @@ spec:
                 exit 1
               }
               cp -a /tmp/repo/mql5/. /mql5/
-              echo "[init-mql5] populated $(ls -A /mql5 | wc -l) entries at /mql5"
+              echo "[init-mql5] populated $(ls -1A /mql5 | wc -l) entries at /mql5"
           volumeMounts:
             - name: mql5
               mountPath: /mql5
