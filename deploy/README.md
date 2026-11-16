@@ -49,7 +49,7 @@ deploy/
 │   └── homelab/               # prod on the real (Talos) cluster — NOT applied yet
 │       ├── kustomization.yaml # image markram92/mt5-prod:1.0.0, NodePort 30801 only
 │       ├── storage.yaml       # PVC mt5-prefix on StorageClass local-path
-│       └── externalsecret.yaml # mt5-minio from Vault secret/mt5/minio
+│       └── externalsecret.yaml # mt5-minio from Vault secret/mt5
 ├── clusters/
 │   └── base/
 │       └── kustomization.yaml # Flux entry point -> ../../overlays/homelab
@@ -453,14 +453,14 @@ which only the `fetch-profile` init container reads:
 
 | Secret key | Vault property | consumer |
 |---|---|---|
-| `MINIO_ACCESS_KEY` | `access_key` | `fetch-profile` → `RCLONE_CONFIG_SRC_ACCESS_KEY_ID` |
-| `MINIO_SECRET_KEY` | `secret_key` | `fetch-profile` → `RCLONE_CONFIG_SRC_SECRET_ACCESS_KEY` |
+| `MINIO_ACCESS_KEY` | `minio_accessKey` | `fetch-profile` → `RCLONE_CONFIG_SRC_ACCESS_KEY_ID` |
+| `MINIO_SECRET_KEY` | `minio_secretKey` | `fetch-profile` → `RCLONE_CONFIG_SRC_SECRET_ACCESS_KEY` |
 
-Vault path: **`secret/mt5/minio`**, `refreshInterval: 1h`. Write it before
-applying:
+Vault KV v2 path: **`secret/mt5`** (API path `/v1/secret/data/mt5`),
+`refreshInterval: 1h`. Write it before applying:
 
 ```bash
-vault kv put secret/mt5/minio access_key=... secret_key=...
+vault kv put secret/mt5 minio_accessKey=... minio_secretKey=...
 ```
 
 Until the path exists, the ExternalSecret reports `SecretSyncedError` and the
@@ -537,7 +537,7 @@ kustomize-builds that one directory, which resolves to
 * **MinIO credentials never enter the repo.** The kind path reads
   `credentials.minio.mt5.json` (gitignored) through a 0600 temp env file and
   applies Secret `mt5-minio`; no value is printed or committed. The homelab path
-  materializes the same Secret from Vault (`secret/mt5/minio`).
+  materializes the same Secret from Vault (`secret/mt5`).
 * **The kind overlays' `secrets.env` sit on exFAT**, where `chmod 600` is a
   no-op, so those files are readable by any local user who can read the
   checkout. They now hold only the VNC pair. `kind-up.sh` verifies the mode and

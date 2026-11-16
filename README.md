@@ -91,8 +91,9 @@ The same prod workload is prepared for the homelab Talos cluster as
 `fetch-profile` against the in-cluster MinIO Service, Vault-backed `mt5-minio`
 credentials via `ExternalSecret`, `local-path` PVC, API on NodePort `30801`) and
 is **not applied yet**. The registry push (`podman login docker.io` then
-`./scripts/push-image.sh <tag>`), the two Vault keys under `secret/mt5/minio`,
-the manual apply and the Flux registration are all documented in
+`./scripts/push-image.sh <tag>`), the two Vault properties under `secret/mt5`
+(`minio_accessKey`, `minio_secretKey`), the manual apply and the Flux
+registration are all documented in
 [deploy/README.md](deploy/README.md#homelab-prod-overlay).
 
 ### MQL5 delivery and release
@@ -152,7 +153,7 @@ There are no MT5 credentials in this repo any more. `dev/.env`, `prod/.env` and
 empty and is re-blanked by `kind-up.sh`); they exist on disk only, are
 gitignored, and `deploy/base/secrets.env.example` documents the keys. The kind
 overlays generate the Secret from their own `secrets.env`; the homelab overlay
-takes its MinIO credentials from Vault (`secret/mt5/minio`) via an
+takes its MinIO credentials from Vault (`secret/mt5`) via an
 `ExternalSecret`. The login profile itself is a secret: bucket `mt5` stays
 private, and `credentials.minio.mt5.json` is never committed.
 
