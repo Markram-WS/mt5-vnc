@@ -3,3 +3,8 @@
 *
 */
 !.gitignore
+
+# Tracked programs (everything else under mql5/ stays ignored)
+!Experts/
+!Experts/PostgrestTestEA.mq5
+!Experts/PostgrestTestEA.ex5

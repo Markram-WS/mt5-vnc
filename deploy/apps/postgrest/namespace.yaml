@@ -1,0 +1,15 @@
+# Namespace for the disposable PostgREST test stack.
+#
+# It is separate from `mt5` on purpose: the database is an emptyDir, so a pod
+# restart throws the data away, and nothing here may ever be confused with the
+# MT5 workload (or be pruned together with it).
+#
+# The stack is a TEST fixture: Postgres (no PVC) + PostgREST + the `events`
+# table the PostgrestTestEA CRUD smoke test writes to. See deploy/README.md,
+# "PostgREST test service".
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mt5-data
+  labels:
+    app.kubernetes.io/part-of: postgrest-test

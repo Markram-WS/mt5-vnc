@@ -10,6 +10,9 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: mt5-prefix
+  # Explicit because the overlay no longer sets a top-level `namespace:` (it
+  # composes namespaces: base -> mt5, apps/postgrest -> mt5-data).
+  namespace: mt5
   labels:
     app.kubernetes.io/name: mt5
     app.kubernetes.io/part-of: mt5

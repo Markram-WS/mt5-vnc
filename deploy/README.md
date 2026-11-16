@@ -42,6 +42,13 @@ deploy/
 │   │   └── kustomization.yaml # HEADLESS=true + tini entrypoint + lean resources
 │   └── fetch-profile/
 │       └── kustomization.yaml # initContainer: seed login Config from MinIO (prod)
+├── apps/
+│   └── postgrest/             # PostgREST test stack, namespace mt5-data
+│       ├── namespace.yaml     # Namespace mt5-data (separate from mt5)
+│       ├── postgres.yaml      # ephemeral postgres:16-alpine + init.sql (emptyDir)
+│       ├── postgrest.yaml     # postgrest v12.2.3 + Service postgrest:3000
+│       ├── secrets.env.example # POSTGRES_USER/PASSWORD template (kind only)
+│       └── talos/             # ExternalSecret postgrest-db (Vault secret/mt5)
 ├── overlays/
 │   ├── kind-dev/              # DEV: the local kind cluster
 │   │   ├── kustomization.yaml # image :dev, secretGenerator + kind-nodeports
@@ -342,8 +349,12 @@ Dev and prod have their own storage; nothing is shared between the clusters.
   regenerates `/etc/hosts`, so this is the only way to keep MT5 LiveUpdate
   blocked.
 
-`mql5/` carries the stock MT5 `.gitignore` (`*`, `*/`, `!.gitignore`), so MQL5
-files must be added with `git add -f`. `mql5/Profiles` is tracked deliberately:
+`mql5/` carries the stock MT5 `.gitignore` (`*`, `*/`, `!.gitignore`), so
+almost every MQL5 file is ignored. Programs that should be tracked are enabled
+by explicit negations there (`!Experts/` plus one `!Experts/<Name>.mq5` /
+`.ex5` per EA — currently `PostgrestTestEA`), so they commit through the normal
+staged-worktree flow; force-add (`git add -f <file>`) is still the tool for a
+one-off file outside that tracked set. `mql5/Profiles` is tracked deliberately:
 `startup.ini`'s `[StartUp] Expert` attaches to the default chart profile, so
 without it MT5 boots but never loads the expert. MT5 rewrites
 `mql5/Profiles/Agents/metatrader-default.md` at runtime, so that file shows up
@@ -362,9 +373,186 @@ deploy/overlays/talos` (prod, or Flux via `deploy/clusters/base`) →
 the previous tag. Runtime MQL5 state (logs, `experts.dat`, rewritten `Profiles`)
 exists only in the `emptyDir` and is lost on restart.
 
+## PostgREST test service
+
+A throwaway CRUD target that proves the terminal can drive a real HTTP API from
+inside the cluster. `mql5/Experts/PostgrestTestEA.mq5` POSTs a row, PATCHes it,
+GETs it back, DELETEs it, GETs again, and logs a single
+`POSTGREST-TEST PASS`/`POSTGREST-TEST FAIL` line.
+
+It lives in namespace **`mt5-data`**, deliberately separate from `mt5`: the
+database is disposable, and nothing here may be confused with — or pruned
+together with — the MT5 workload.
+
+### What runs
+
+| Object | Notes |
+|---|---|
+| `Namespace mt5-data` | the disposal unit: `kubectl delete namespace mt5-data` removes everything |
+| `ConfigMap postgres-init` | `init.sql` creates `public.events` (`id` bigserial, `created_at`, `updated_at`, `source`, `action`, `payload jsonb`) and trigger `events_set_updated_at` |
+| `Deployment postgres` | `postgres:16-alpine`, digest-pinned; **no PVC** — `PGDATA` is on an `emptyDir`, so every pod restart starts empty and re-runs `init.sql` |
+| `Deployment postgrest` | `postgrest:v12.2.3`, digest-pinned; anon role = the Secret's `POSTGRES_USER`, schema `public`, **no JWT** and no row-level security |
+| `Service postgrest` | port 3000, ClusterIP only |
+
+Both workloads run tiny requests/limits (postgres 100m/128Mi → 500m/256Mi,
+postgrest 25m/32Mi → 200m/128Mi) and both images are pinned by digest, so kind
+and Talos run the same bytes. The manifests live in `deploy/apps/postgrest/`
+and both overlays include that directory unchanged, so the Deployments cannot
+drift between environments.
+
+### Reachability
+
+`http://postgrest.mt5-data.svc.cluster.local:3000` — in-cluster only. There is
+no NodePort, no Ingress and no TLS: the EA runs in a pod in the same cluster, so
+a Service name is all it needs. (Dev publishes the MT5 VNC/API ports through
+`components/kind-nodeports`; the PostgREST Service is deliberately not part of
+that component.)
+
+### Secret `postgrest-db`
+
+One Secret, **two keys** — `POSTGRES_USER` and `POSTGRES_PASSWORD` — with the
+same name in both environments so the two Deployments stay identical. Both keys
+are consumed everywhere: the postgres entrypoint creates that role (and runs
+`init.sql` as it, so it owns the schema/table/sequence), while PostgREST
+connects as it and expands it into `PGRST_DB_ANON_ROLE`. The user must therefore
+be the **same value everywhere** — Vault, the kind env file, and whatever the
+pods already hold.
+
+* **kind-dev** — `secretGenerator postgrest-db` in
+  `deploy/overlays/kind-dev/kustomization.yaml` reads the gitignored
+  `deploy/overlays/kind-dev/postgrest-secrets.env`, which `scripts/kind-up.sh`
+  creates on first run (`umask 077`, `POSTGRES_USER=mt5` plus
+  `openssl rand -hex 32` for the password, value never printed, an existing
+  password never overwritten). An env file written before the role was wired
+  through is migrated: the script appends the missing `POSTGRES_USER=mt5` line
+  and leaves every other line byte-identical. Template:
+  `deploy/apps/postgrest/secrets.env.example`.
+* **talos** — `ExternalSecret postgrest-db`
+  (`deploy/apps/postgrest/talos/externalsecret.yaml`) pulls properties
+  `POSTGRES_USER` and `POSTGRES_PASSWORD` from Vault `secret/mt5`. Both must
+  exist **before** applying the overlay; otherwise the ExternalSecret reports
+  `SecretSyncedError` and both pods sit in `CreateContainerConfigError`.
+
+The password is hex on purpose: it is embedded verbatim in `PGRST_DB_URI`
+(`postgres://<user>:<pw>@postgres:5432/mt5`), so `/`, `:` or `@` would have to
+be percent-encoded inside the URI.
+
+### Operator prerequisite: the WebRequest whitelist
+
+MT5 only lets an EA reach a URL listed under **Tools > Options > Expert Advisors
+> Allow WebRequest for listed URL**. The terminal stores that list
+**encrypted** in `Config/common.ini` (`[Experts]` / `WebRequestUrl=<hex>`): an
+opaque hex blob, written only by the terminal. It therefore cannot be committed
+or hand-written from this repo, and adding the URL once through the Options
+dialog is the only supported way. Do it in the profile the pod will actually
+read:
+
+* **dev** — add `http://postgrest.mt5-data.svc.cluster.local:3000` over VNC. The
+  terminal writes into the **host-mounted** profile
+  (`$MT5_DATA_DIR/profile/dev/Config`), which is the directory the pod mounts.
+* **prod** — the profile has to be opened by a terminal, the URL added, and that
+  tree uploaded to MinIO **before** it is used (see "Copying the login profile
+  to MinIO"); `fetch-profile` then seeds a `Config` that already contains the
+  entry.
+
+**Prod risk (unverified).** The prod overlay is headless
+(`components/prod-headless`: no KasmVNC, no nginx, no s6), so the dialog step
+**cannot be performed inside the prod pod at all**: prod depends entirely on the
+encrypted blob inside the seeded `Config` being accepted by the prod terminal.
+Whether it is accepted there has **not** been tested — the blob may be tied to
+something we cannot reproduce, and no run has yet shown a prod terminal
+answering a whitelisted `WebRequest`. Treat it as unknown until measured. The
+check is the EA's own log line: `WebRequest ... error 4060`/`4014` means the URL
+was not accepted. If that happens, the EA's HTTP test cannot run in prod without
+a one-off UI-capable run (a KasmVNC-capable MT5 pod or a local terminal) to
+whitelist the URL in the profile that is later uploaded.
+
+Without the entry `WebRequest()` returns `-1` with `GetLastError()` `4060` or
+`4014`, and the EA logs exactly that. Raw MQL5 sockets are **not** a workaround:
+measured on build 6320, a plain TCP connect to the same host:port returned
+`false` with error `4014` while `WebRequest` to the same URL answered `200` from
+the same terminal with the same whitelist entry. That is why the EA uses the
+7-argument `WebRequest()` and carries no HTTP framing of its own — `WebRequest`
+handles `Content-Length`, chunked responses and connection setup.
+
+### Running the test
+
+Start from an empty database, so a leaked row cannot mask a failure. The
+Postgres `emptyDir` dies with its pod:
+
+```bash
+# both Deployments carry app.kubernetes.io/part-of=postgrest-test
+kubectl -n mt5-data delete pod -l app.kubernetes.io/part-of=postgrest-test
+kubectl -n mt5-data rollout status deploy/postgres
+kubectl -n mt5-data rollout status deploy/postgrest
+```
+
+Two `-l` flags on one `kubectl delete pod` are an **AND**, not an OR, so
+`-l app.kubernetes.io/name=postgres -l app.kubernetes.io/name=postgrest`
+matches nothing. Either use the single shared label as above, or delete the two
+pods one by one (postgres first).
+
+Then get the EA onto a chart. MT5 builds the Navigator's expert list at startup
+and refuses to attach an EA whose `.ex5` was compiled after the terminal
+started, so a restart is required before the first attach. The verified path is
+the Navigator, not the auto-start variable:
+
+1. Restart the terminal so the Navigator rescans `MQL5/Experts`. Restarting the
+   whole MT5 pod also rescans it, but re-clones `MQL5_GIT_REF` into the
+   `emptyDir`, so `PostgrestTestEA.ex5` must then be part of the released tree
+   (see "MQL5 delivery and release").
+2. Over VNC: **Navigator > Expert Advisors**, double-click `PostgrestTestEA`.
+3. Accept the attach dialog with **Allow Algo Trading** checked.
+
+```bash
+kubectl -n mt5 logs -f deployment/mt5 -c mt5 | grep POSTGREST
+```
+
+Measured caveat: writing `MT5_AUTO_START_EA=PostgrestTestEA` into both
+`startup.ini` locations (the install root and the terminal UUID directory
+`D0E8209F77C8CF37AD8BF550E51FF075`) did **not** decide the attachment in this
+test — the terminal still attached `TestAutoStartEA`. So attach via the
+Navigator as above. What attaches an EA when the shipped profile loads is the
+chart profile: `mql5/Profiles/Charts/Default/chart01.chr` carries an
+`<expert>` block (`name=` / `path=Experts\TestAutoStartEA.ex5`) naming the EA
+attached on boot, currently `TestAutoStartEA`.
+
+The same lines appear in the terminal journal and in `MQL5/logs/YYYYMMDD.log`
+inside the pod.
+
+Each step prints its method, URL, status and a body snippet:
+
+```
+POSTGREST POST http://postgrest.mt5-data.svc.cluster.local:3000/events -> HTTP 201 | [...]
+POSTGREST PATCH .../events?id=eq.<id> -> HTTP 200 | [...]
+POSTGREST GET .../events?id=eq.<id> -> HTTP 200 | [...]
+POSTGREST DELETE .../events?id=eq.<id> -> HTTP 204
+POSTGREST GET .../events?id=eq.<id> (after delete) -> HTTP 200 | []
+POSTGREST-TEST PASS: create/update/read/delete/read on http://postgrest.mt5-data.svc.cluster.local:3000/events (id=<id>, 0 rows left)
+```
+
+`POSTGREST-TEST FAIL: WebRequest(...) error 4060` means the whitelist step above
+was skipped for this profile. The table must be empty afterwards — `curl` exists
+in the dev image:
+
+```bash
+kubectl -n mt5 exec deploy/mt5 -c mt5 -- \
+  curl -s 'http://postgrest.mt5-data.svc.cluster.local:3000/events'
+# -> []
+```
+
+### Teardown
+
+```bash
+kubectl delete namespace mt5-data
+```
+
+Nothing is persisted (`PGDATA` is an `emptyDir`), so deleting the two pods is
+already a full reset.
+
 ## Secrets
 
-There are two secrets, and only one of them is about MT5 at all:
+There are three secrets, and only one of them is about MT5 at all:
 
 * **`mt5-secrets`** (kind-dev only, optional on base) — a `secretGenerator`
   (`disableNameSuffixHash: true`) reads a `secrets.env` that sits **inside the
@@ -377,6 +565,10 @@ There are two secrets, and only one of them is about MT5 at all:
   `fetch-profile` init container: `MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY`. It is
   never created from a local file: the Talos overlay ships an `ExternalSecret`
   that materializes it from Vault `secret/mt5`.
+* **`postgrest-db`** (namespace `mt5-data`) — `POSTGRES_USER` +
+  `POSTGRES_PASSWORD` for the PostgREST test stack, generated by `kind-up.sh`
+  into the gitignored `deploy/overlays/kind-dev/postgrest-secrets.env` on kind,
+  materialized from Vault `secret/mt5` on Talos. See "PostgREST test service".
 
 `kind-up.sh` creates `deploy/overlays/kind-dev/secrets.env` on first run from
 `dev/.env` by reading `MT5_VNC_USER` and `MT5_VNC_PASSWORD` with `grep`/`cut` —
@@ -497,13 +689,23 @@ the same names as the Secret keys:
 |---|---|---|
 | `MINIO_ACCESS_KEY` | `MINIO_ACCESS_KEY` | `fetch-profile` → `RCLONE_CONFIG_SRC_ACCESS_KEY_ID` |
 | `MINIO_SECRET_KEY` | `MINIO_SECRET_KEY` | `fetch-profile` → `RCLONE_CONFIG_SRC_SECRET_ACCESS_KEY` |
+| `POSTGRES_USER` | `POSTGRES_USER` | Secret `postgrest-db` (`deploy/apps/postgrest/talos/`) → the `postgres` and `postgrest` pods of the test stack (role + anon role) |
+| `POSTGRES_PASSWORD` | `POSTGRES_PASSWORD` | Secret `postgrest-db` (`deploy/apps/postgrest/talos/`) → the `postgres` and `postgrest` pods of the test stack |
 
 Vault KV v2 path: **`secret/mt5`** (API path `/v1/secret/data/mt5`),
 `refreshInterval: 1h`. Write it before applying:
 
 ```bash
 vault kv put secret/mt5 MINIO_ACCESS_KEY=... MINIO_SECRET_KEY=...
+# add the PostgREST test database credentials to the SAME path (do not re-put
+# the keys above with empty values — kv put replaces the whole secret)
+vault kv patch secret/mt5 POSTGRES_USER=mt5 POSTGRES_PASSWORD="$(openssl rand -hex 32)"
 ```
+
+`POSTGRES_USER` must be the same role everywhere (Vault, the kind env file) —
+the postgres entrypoint creates it and PostgREST connects as it.
+`POSTGRES_PASSWORD` must be URL-safe hex (or base64url): it is embedded verbatim
+in `PGRST_DB_URI`, so `/`, `:` or `@` would have to be percent-encoded.
 
 Until the path exists, the ExternalSecret reports `SecretSyncedError` and the
 pod sits in `CreateContainerConfigError` (Secret `mt5-minio` absent). Nothing in
@@ -672,8 +874,18 @@ kubectl kustomize deploy/overlays/talos | grep -A2 'name: fetch-profile'
 kubectl kustomize deploy/overlays/talos | grep 'MINIO_URL:'
 ```
 
+The PostgREST test stack renders in both overlays and keeps its own namespace:
+
+```bash
+kubectl kustomize deploy/overlays/talos | grep -c 'name: postgrest'   # 12: stack + ExternalSecret
+# kind-dev: no overlay-level namespace, the included roots bring their own
+kubectl kustomize deploy/overlays/kind-dev | grep -q 'namespace: mt5-data'
+```
+
 `deploy/overlays/kind-dev` needs its `secrets.env` (run `kind-up.sh` once, or
 copy `deploy/base/secrets.env.example` next to the overlay's
-`kustomization.yaml`). `deploy/base`, `deploy/overlays/talos` and
+`kustomization.yaml`) — and, for the same reason, its
+`postgrest-secrets.env`, which `kind-up.sh` also generates on first run.
+`deploy/base`, `deploy/overlays/talos` and
 `deploy/clusters/base` render from committed files alone — that is the point of
 keeping the `secretGenerator` out of base.

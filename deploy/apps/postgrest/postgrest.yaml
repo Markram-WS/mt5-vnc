@@ -1,0 +1,110 @@
+# PostgREST in front of the ephemeral Postgres.
+#
+# The MT5 pod reaches it in-cluster at
+#   http://postgrest.mt5-data.svc.cluster.local:3000
+# so nothing is published outside the cluster (no NodePort, no Ingress).
+#
+# The anon role is `mt5`, the same role that owns the database; there is no
+# JWT and no row-level security. That is deliberate: this is a throwaway test
+# fixture on a namespace of its own, not a data service.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgrest
+  labels:
+    app.kubernetes.io/name: postgrest
+    app.kubernetes.io/part-of: postgrest-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgrest
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgrest
+        app.kubernetes.io/part-of: postgrest-test
+    spec:
+      containers:
+        - name: postgrest
+          # v12.2.3, pinned by digest (multi-arch index). Verified to pull:
+          # manifests exist for linux/amd64 and linux/arm64.
+          image: docker.io/postgrest/postgrest:v12.2.3@sha256:729bf65c733b73f5b52777f0e4b853f22ed73aa67a22d38269d289779b0a8401
+          imagePullPolicy: IfNotPresent
+          env:
+            # Declared first so the URI and the anon role below can expand
+            # $(POSTGRES_USER) / $(POSTGRES_PASSWORD); Kubernetes only expands
+            # variables defined earlier in the list. Both come from the same
+            # Secret the postgres pod reads, so the role cannot drift.
+            # Never printed: no logs echo the URI at level info.
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgrest-db
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgrest-db
+                  key: POSTGRES_PASSWORD
+            - name: PGRST_DB_URI
+              value: postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres:5432/mt5
+            - name: PGRST_DB_ANON_ROLE
+              value: $(POSTGRES_USER)
+            - name: PGRST_DB_SCHEMAS
+              value: public
+            - name: PGRST_SERVER_PORT
+              value: "3000"
+            - name: PGRST_LOG_LEVEL
+              value: info
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          # PostgREST answers / with the OpenAPI document of the exposed schema,
+          # so a 200 there proves the DB connection is up too.
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          # Measured failure without it: deleting both pods together makes
+          # Postgres run its init phase (shutdown + restart) while PostgREST
+          # starts; PostgREST then answers 503 to / indefinitely (19
+          # consecutive readiness failures, no recovery, not even a retry log
+          # line) until the pod is restarted by hand. A liveness probe restarts
+          # it instead, so the fixture heals itself.
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgrest
+  labels:
+    app.kubernetes.io/name: postgrest
+    app.kubernetes.io/part-of: postgrest-test
+spec:
+  selector:
+    app.kubernetes.io/name: postgrest
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      protocol: TCP

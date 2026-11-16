@@ -1,0 +1,15 @@
+# Talos-only flavour of the PostgREST test stack: just the ExternalSecret that
+# materializes Secret postgrest-db from Vault.
+#
+# It lives in its own directory because kustomize may only pull a *directory*
+# that is a kustomization root from outside the including root; a bare `.yaml`
+# file outside `resources` is rejected by the load restrictor
+# ("security; file ... is not in or below ..."). Keeping it here means the
+# Talos overlay still includes the stack exactly like the kind overlay does.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: mt5-data
+
+resources:
+  - externalsecret.yaml

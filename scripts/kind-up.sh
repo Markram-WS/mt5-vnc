@@ -84,6 +84,11 @@ PREFIX_PROFILE_DIR="$DATA_DIR/prefix/drive_c/Program Files/MetaTrader 5/Config"
 # local secret file.
 SECRETS_FILE="$OVERLAY/secrets.env"
 
+# PostgREST test database password (namespace mt5-data), generated next to the
+# kind overlay's kustomization for the same reason: kustomize refuses an env
+# file outside the kustomization root. Gitignored like secrets.env.
+POSTGREST_SECRETS_FILE="$OVERLAY/postgrest-secrets.env"
+
 # `podman save` writes uncompressed layers (dev image is ~8.8GB), so the
 # archive must NOT go to $TMPDIR — on this host /tmp is a 7.5GB tmpfs.
 IMAGE_TMPDIR="${KIND_IMAGE_TMPDIR:-$HOME/.cache/mt5-kind-image-tars}"
@@ -219,6 +224,49 @@ blank_mt5_keys() {
 blank_mt5_keys "$SECRETS_FILE"
 echo "==> dev logs in from the mounted profile at $PROFILE_DEV_DIR (MT5_* env is empty)."
 echo "    Log in manually via VNC only when that profile is first created."
+
+# Credentials for the PostgREST test stack's Postgres (Secret postgrest-db, read
+# by both the postgres and the postgrest pods). Written ONCE, never printed, and
+# never overwritten: an existing file is the operator's own choice.
+#
+# The role is a fixed name (it is not a secret) but it has to live in the same
+# Secret as the password, because the entrypoint creates that role and PostgREST
+# connects as it (PGRST_DB_ANON_ROLE expands POSTGRES_USER).
+#
+# The password is hex on purpose: the value is embedded verbatim in
+# PGRST_DB_URI (postgres://<user>:<pw>@postgres:5432/mt5), so `/`, `:` or `@`
+# would have to be percent-encoded inside the URI.
+echo "==> Checking $POSTGREST_SECRETS_FILE"
+if [ ! -f "$POSTGREST_SECRETS_FILE" ]; then
+    if ! command -v openssl >/dev/null 2>&1; then
+        echo "ERROR: openssl is required to generate $POSTGREST_SECRETS_FILE (32 hex bytes);" >&2
+        echo "       install it, or write POSTGRES_USER=mt5 and POSTGRES_PASSWORD=<url-safe value>" >&2
+        echo "       into that file yourself." >&2
+        exit 1
+    fi
+    (
+        umask 077
+        {
+            printf 'POSTGRES_USER=mt5\n'
+            printf 'POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 32)"
+        } > "$POSTGREST_SECRETS_FILE"
+    )
+    chmod 600 "$POSTGREST_SECRETS_FILE"
+    echo "==> Generated $POSTGREST_SECRETS_FILE (random password, not printed)"
+elif ! grep -q '^POSTGRES_USER=' "$POSTGREST_SECRETS_FILE"; then
+    # Migration: files written before the role was wired through the Secret have
+    # only POSTGRES_PASSWORD. Append the missing key and leave every other line
+    # untouched — never rewrite (or echo) the password that is already there.
+    (
+        umask 077
+        # Do not glue the new line onto a file that lacks a trailing newline.
+        if [ -n "$(tail -c 1 "$POSTGREST_SECRETS_FILE")" ]; then
+            printf '\n'
+        fi
+        printf 'POSTGRES_USER=mt5\n'
+    ) >> "$POSTGREST_SECRETS_FILE"
+    echo "==> added missing POSTGRES_USER=mt5 to $POSTGREST_SECRETS_FILE"
+fi
 
 echo "==> Ensuring prefix data dir '$DATA_DIR' exists"
 mkdir -p "$DATA_DIR/prefix"
