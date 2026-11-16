@@ -73,7 +73,9 @@ spec:
                 exit 1
               }
               cp -a /tmp/repo/mql5/. /mql5/
-              echo "[init-mql5] populated $(ls -1A /mql5 | wc -l) entries at /mql5"
+              # 5 top-level entries / 295 files is the committed tree; MT5
+              # creates Files, Indicators, Libraries, Scripts and logs itself.
+              echo "[init-mql5] populated $(ls -1A /mql5 | wc -l) entries, $(find /mql5 -type f | wc -l) files at /mql5"
           volumeMounts:
             - name: mql5
               mountPath: /mql5
