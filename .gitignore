@@ -3,6 +3,9 @@
 /prod/.env
 /deploy/overlays/*/secrets.env
 /deploy/base/secrets.env
+# Local-only secret files (never commit; public repo)
+/.env
+/credentials*.json
 
 # MT5 runtime state
 **/experts.dat
