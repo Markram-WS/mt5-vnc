@@ -178,6 +178,11 @@ extraMounts whose host path does not exist.
   compose `extra_hosts`); k8s regenerates `/etc/hosts`, so this is the only way
   to keep MT5 LiveUpdate blocked.
 
+`dev/mql5` and `prod/mql5` carry their own `.gitignore` (`*`, `*/`,
+`!.gitignore`), so MQL5 files must be added with `git add -f`. `MQL5/Profiles`
+is tracked deliberately: `startup.ini`'s `[StartUp] Expert` attaches to the
+default chart profile, so without it MT5 boots but never loads the expert.
+
 ## Secrets
 
 `deploy/base/secrets.env` is required at render time (it feeds the

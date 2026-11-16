@@ -27,6 +27,14 @@ every MT5 launch, and MT5 attaches the EA on boot. `MT5_AUTO_START_EA`,
 `MT5_AUTO_START_SYMBOL` and `MT5_AUTO_START_PERIOD` select it at runtime, so no
 rebuild is needed to point at a different EA, symbol or timeframe.
 
+### MQL5 trees need `git add -f`
+
+`dev/mql5` and `prod/mql5` each carry their own `.gitignore` (`*`, `*/`,
+`!.gitignore`), so any MQL5 file has to be added with `git add -f`.
+`MQL5/Profiles` is tracked deliberately: `startup.ini`'s `[StartUp] Expert`
+attaches to the default chart profile, so without it MT5 boots but never loads
+the expert.
+
 ## Deployment
 
 `deploy/` is one `Deployment/mt5` in namespace `mt5` with two overlays that
