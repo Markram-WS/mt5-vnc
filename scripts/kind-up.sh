@@ -6,11 +6,15 @@
 # The local kind cluster is DEV ONLY: image localhost/mt5-dev:dev (gmag11 base,
 # KasmVNC UI on :3000, HEADLESS=false) applied from deploy/overlays/kind-dev.
 # Prod does not run here at all — it runs on the Talos cluster from
-# deploy/overlays/talos with the published markram92/mt5-prod image.
+# deploy/overlays/talos-prod with the published markram92/mt5-prod image.
 #
 # Both environments use the same demo account (26435893 on VantageMarkets-Demo),
 # but dev logs in from the HOST-mounted profile ($MT5_DATA_DIR/profile/dev/Config)
 # and needs no MinIO, while prod seeds the same profile from MinIO once.
+#
+# Credentials: the repo-root .env is the single local source. This script no
+# longer generates per-overlay secret env files — it calls scripts/secrets.sh,
+# which reads .env and creates the two Secrets before the overlay is applied.
 set -euo pipefail
 
 usage() {
@@ -20,6 +24,9 @@ Usage: ./scripts/kind-up.sh [-h|--help]
 Brings up (if needed) the local kind cluster, builds localhost/mt5-dev:dev from
 dev/, loads it into the node and applies deploy/overlays/kind-dev. There is no
 mode switch: this cluster runs dev only.
+
+Requires .env at the repo root (copy .env.example and fill it in):
+scripts/secrets.sh creates the cluster Secrets from it.
 
 Environment:
   MT5_DATA_DIR        host directory for the Wine prefix (default: $HOME/mt5-data)
@@ -58,7 +65,6 @@ fi
 
 CLUSTER_NAME="mt5"
 KIND_CONFIG_TMPL="deploy/kind-cluster.yaml.tmpl"
-SECRETS_EXAMPLE="deploy/base/secrets.env.example"
 DATA_DIR="${MT5_DATA_DIR:-$HOME/mt5-data}"
 # The Wine prefix must live on a real filesystem: Wine maps built-in DLLs with
 # UNIX symlinks, which exFAT cannot store (the repo itself is on exFAT).
@@ -67,7 +73,6 @@ DATA_DIR="${DATA_DIR%/}"
 IMAGE="localhost/mt5-dev:dev"
 BUILD_CONTEXT="dev"
 OVERLAY="deploy/overlays/kind-dev"
-ENV_FILE="dev/.env"
 
 # dev login profile: the host directory mounted (read-write) over the terminal's
 # Config dir. It is inside $DATA_DIR, which the kind node already extraMounts at
@@ -77,17 +82,10 @@ ENV_FILE="dev/.env"
 PROFILE_DEV_DIR="$DATA_DIR/profile/dev/Config"
 PREFIX_PROFILE_DIR="$DATA_DIR/prefix/drive_c/Program Files/MetaTrader 5/Config"
 
-# The secret is generated INSIDE the overlay: kustomize refuses an env file that
-# lies outside the kustomization root ("security; file ... is not in or below"),
-# so the overlay owns its own deploy/overlays/kind-dev/secrets.env. Keeping it
-# out of base/ is what lets base — and the talos overlay — render without any
-# local secret file.
-SECRETS_FILE="$OVERLAY/secrets.env"
-
-# PostgREST test database password (namespace mt5-data), generated next to the
-# kind overlay's kustomization for the same reason: kustomize refuses an env
-# file outside the kustomization root. Gitignored like secrets.env.
-POSTGREST_SECRETS_FILE="$OVERLAY/postgrest-secrets.env"
+# Secrets are not part of this overlay any more: scripts/secrets.sh reads the
+# repo-root .env and creates them out-of-band (see the "Applying" step below).
+# The overlay therefore renders from committed files alone — no secret env file
+# has to exist next to its kustomization.
 
 # `podman save` writes uncompressed layers (dev image is ~8.8GB), so the
 # archive must NOT go to $TMPDIR — on this host /tmp is a 7.5GB tmpfs.
@@ -156,117 +154,12 @@ load_image() {
     rm -f "$tar"
 }
 
-# Read KEY=VALUE out of a .env without ever sourcing it, and never echo values.
-env_value() {
-    local file="$1" key="$2" line
-    line="$({ grep -E "^[[:space:]]*${key}=" "$file" 2>/dev/null || true; } | tail -n 1)"
-    line="${line#*=}"
-    line="${line%$'\r'}"
-    line="${line#\"}"; line="${line%\"}"
-    line="${line#\'}"; line="${line%\'}"
-    printf '%s' "$line"
-}
-
-# Credentials for the dev overlay. Never printed, never committed: the file is
-# written mode 0600 (best effort on exFAT) from dev/.env, and only when it does
-# not exist yet.
-#
 # MT5 does not take credentials from the environment: dev logs in from the
-# host-mounted Config directory. The MT5_* keys therefore stay empty; only the
-# VNC pair (CUSTOM_USER/PASSWORD) is a real secret here.
-echo "==> Checking $SECRETS_FILE"
-if [ ! -f "$SECRETS_FILE" ]; then
-    if [ ! -f "$ENV_FILE" ]; then
-        cp "$SECRETS_EXAMPLE" "$SECRETS_FILE"
-        chmod 600 "$SECRETS_FILE"
-        echo "ERROR: $SECRETS_FILE was missing and $ENV_FILE does not exist." >&2
-        echo "A template was copied from $SECRETS_EXAMPLE (mode 0600)." >&2
-        echo "Fill in CUSTOM_USER and PASSWORD (VNC only), then re-run." >&2
-        exit 1
-    fi
-    echo "==> Generating $SECRETS_FILE from $ENV_FILE"
-    (
-        umask 077
-        {
-            printf 'CUSTOM_USER=%s\n' "$(env_value "$ENV_FILE" MT5_VNC_USER)"
-            printf 'PASSWORD=%s\n' "$(env_value "$ENV_FILE" MT5_VNC_PASSWORD)"
-            printf 'MT5_SERVER=\n'
-            printf 'MT5_ACCOUNT=\n'
-            printf 'MT5_PASSWORD=\n'
-        } > "$SECRETS_FILE"
-    )
-    chmod 600 "$SECRETS_FILE"
-    # The repo is exFAT, which stores no POSIX modes: the chmod above silently
-    # does nothing there. Say so instead of pretending the file is private.
-    if [ "$(stat -c %a "$SECRETS_FILE" 2>/dev/null)" != "600" ]; then
-        echo "WARNING: $SECRETS_FILE could not be chmod 600 (filesystem does not store POSIX modes);" >&2
-        echo "         keep real credentials out of this checkout, or move deploy/ onto an ext4 filesystem." >&2
-    fi
-fi
-
-# Enforce profile-only login on an existing file too: a secrets.env written
-# before the profile existed would otherwise pass stale MT5_* values on the
-# terminal's command line (and appear in the pod's process list).
-blank_mt5_keys() {
-    local file="$1" line tmp
-    tmp="$(mktemp "${TMPDIR:-/tmp}/mt5-secrets.XXXXXX")"
-    while IFS= read -r line || [ -n "$line" ]; do
-        case "$line" in
-            MT5_SERVER=*|MT5_ACCOUNT=*|MT5_PASSWORD=*)
-                printf '%s=\n' "${line%%=*}" ;;
-            *)
-                printf '%s\n' "$line" ;;
-        esac
-    done < "$file" > "$tmp"
-    cat "$tmp" > "$file"
-    rm -f "$tmp"
-}
-blank_mt5_keys "$SECRETS_FILE"
-echo "==> dev logs in from the mounted profile at $PROFILE_DEV_DIR (MT5_* env is empty)."
+# host-mounted Config directory, so the only Secret the pod reads is the VNC
+# pair. scripts/secrets.sh turns the repo-root .env into both Secrets later,
+# once the cluster exists (this script never writes per-overlay env files).
+echo "==> dev logs in from the mounted profile at $PROFILE_DEV_DIR (no MT5 credentials)."
 echo "    Log in manually via VNC only when that profile is first created."
-
-# Credentials for the PostgREST test stack's Postgres (Secret postgrest-db, read
-# by both the postgres and the postgrest pods). Written ONCE, never printed, and
-# never overwritten: an existing file is the operator's own choice.
-#
-# The role is a fixed name (it is not a secret) but it has to live in the same
-# Secret as the password, because the entrypoint creates that role and PostgREST
-# connects as it (PGRST_DB_ANON_ROLE expands POSTGRES_USER).
-#
-# The password is hex on purpose: the value is embedded verbatim in
-# PGRST_DB_URI (postgres://<user>:<pw>@postgres:5432/mt5), so `/`, `:` or `@`
-# would have to be percent-encoded inside the URI.
-echo "==> Checking $POSTGREST_SECRETS_FILE"
-if [ ! -f "$POSTGREST_SECRETS_FILE" ]; then
-    if ! command -v openssl >/dev/null 2>&1; then
-        echo "ERROR: openssl is required to generate $POSTGREST_SECRETS_FILE (32 hex bytes);" >&2
-        echo "       install it, or write POSTGRES_USER=mt5 and POSTGRES_PASSWORD=<url-safe value>" >&2
-        echo "       into that file yourself." >&2
-        exit 1
-    fi
-    (
-        umask 077
-        {
-            printf 'POSTGRES_USER=mt5\n'
-            printf 'POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 32)"
-        } > "$POSTGREST_SECRETS_FILE"
-    )
-    chmod 600 "$POSTGREST_SECRETS_FILE"
-    echo "==> Generated $POSTGREST_SECRETS_FILE (random password, not printed)"
-elif ! grep -q '^POSTGRES_USER=' "$POSTGREST_SECRETS_FILE"; then
-    # Migration: files written before the role was wired through the Secret have
-    # only POSTGRES_PASSWORD. Append the missing key and leave every other line
-    # untouched — never rewrite (or echo) the password that is already there.
-    (
-        umask 077
-        # Do not glue the new line onto a file that lacks a trailing newline.
-        if [ -n "$(tail -c 1 "$POSTGREST_SECRETS_FILE")" ]; then
-            printf '\n'
-        fi
-        printf 'POSTGRES_USER=mt5\n'
-    ) >> "$POSTGREST_SECRETS_FILE"
-    echo "==> added missing POSTGRES_USER=mt5 to $POSTGREST_SECRETS_FILE"
-fi
 
 echo "==> Ensuring prefix data dir '$DATA_DIR' exists"
 mkdir -p "$DATA_DIR/prefix"
@@ -312,6 +205,10 @@ fi
 podman exec "$NODE_NAME" crictl images "$IMAGE"
 
 echo "==> Applying kustomize overlay $OVERLAY"
+# The overlay carries no secretGenerator, so the Secrets must exist first: this
+# is the only step that turns .env into cluster Secrets, and it refuses a
+# non-kind context (prod Secrets come from Vault).
+"$SCRIPT_DIR/secrets.sh" apply
 kubectl apply -k "$OVERLAY"
 
 echo "==> Enforcing single-Deployment exclusivity"
@@ -337,6 +234,6 @@ echo ""
 echo "==> Done (dev on kind)"
 kubectl -n mt5 get pods,pvc
 echo ""
-echo "KasmVNC UI:    http://localhost:3000  (user/password from $SECRETS_FILE)"
+echo "KasmVNC UI:    http://localhost:3000  (user/password from the repo-root .env)"
 echo "mt5linux API:  localhost:8001"
-echo "Prod runs on the Talos cluster (deploy/overlays/talos), never here."
+echo "Prod runs on the Talos cluster (deploy/overlays/talos-prod), never here."

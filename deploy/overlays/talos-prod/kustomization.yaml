@@ -15,9 +15,9 @@ resources:
   - externalsecret.yaml
   # PostgREST test stack + its Vault-backed Secret postgrest-db (namespace
   # mt5-data). Add POSTGRES_PASSWORD to secret/mt5 first — see
-  # apps/postgrest/talos/externalsecret.yaml.
+  # apps/postgrest/talos-prod/externalsecret.yaml.
   - ../../apps/postgrest
-  - ../../apps/postgrest/talos
+  - ../../apps/postgrest/talos-prod
 
 # The prod deltas (HEADLESS=true, tini entrypoint, lean resources) come from the
 # shared prod-headless component, plus the fetch-profile init container that

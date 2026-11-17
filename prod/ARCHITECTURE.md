@@ -102,7 +102,7 @@ MT5_AUTO_START_EA            ┌────────────────
 MT5_AUTO_START_SYMBOL  ─────▶│ start.sh                     │
 MT5_AUTO_START_PERIOD        │   writes startup.ini          │
 ─────────────────────────────│───────────────────────────────│
-        .env                 │[StartUp]                      │
+        ConfigMap mt5-env    │[StartUp]                      │
                              │Expert/Symbol/Period           │
                              └───────────────┬──────────────┘
                                              │ read at boot
@@ -117,7 +117,6 @@ MT5_AUTO_START_PERIOD        │   writes startup.ini          │
 ```
 prod/
 ├── Dockerfile                  # thin base + deps + scripts baked in
-├── .env / .env.example         # local build inputs only (never applied to a cluster)
 ├── README.md
 ├── ARCHITECTURE.md             # (this)
 └── Metatrader/
@@ -200,6 +199,7 @@ overlay patches `MINIO_URL` to the in-cluster Service.
 - The prefix PVC `mt5-prefix` is the single writable state; a second instance would
   need its own PVC.
 - ConfigMap `mt5-env` and the `ExternalSecret`/`Secret mt5-minio` are the only
-  injection points; `.env` files are inputs for local builds, not cluster config.
+  injection points; the local `.env` is documented in `docs/secrets.md` and never
+  reaches a cluster.
 - A future artifact store could serve the MQL5 archive instead of a `git clone` at
   pod start (the init container is the only seam that would change).

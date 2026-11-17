@@ -3,16 +3,21 @@
 # include this directory unchanged.
 #
 # Apply targets:
-#   kind-dev  -> resources: ../../apps/postgrest + secretGenerator postgrest-db
-#   talos     -> resources: ../../apps/postgrest + ../../apps/postgrest/talos
-#                (the latter materializes Secret postgrest-db from Vault)
+#   kind-dev   -> resources: ../../apps/postgrest; Secret postgrest-db is
+#                 created out-of-band by scripts/secrets.sh (from the repo-root
+#                 .env) before the overlay is applied
+#   talos-prod -> resources: ../../apps/postgrest + ../../apps/postgrest/talos-prod
+#                 (the latter materializes Secret postgrest-db from Vault)
 #
-# There is deliberately NO secretGenerator here: the base must render from
-# committed files alone, and the Talos overlay must never need a local secret
-# file. Secret `postgrest-db` (key POSTGRES_PASSWORD) is provided by the overlay:
-# generated from the gitignored deploy/overlays/kind-dev/postgrest-secrets.env on
-# kind, from the ExternalSecret in ./talos on Talos. Same name in both, so the
+# There is deliberately NO secretGenerator anywhere in this directory: it must
+# render from committed files alone, and the Talos overlay must never need a
+# local secret file. Same Secret name and keys in both environments, so the
 # Deployments never change.
+#
+# WHO connects (POSTGRES_USER / POSTGRES_PASSWORD) is Secret `postgrest-db`.
+# WHERE the database is (POSTGRES_HOST / POSTGRES_PORT / POSTGRES_DB /
+# POSTGREST_URL) is ConfigMap `postgres-conn` in configmap.yaml — coordinates
+# are not credentials and do not belong in a Secret.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -20,5 +25,6 @@ namespace: mt5-data
 
 resources:
   - namespace.yaml
+  - configmap.yaml
   - postgres.yaml
   - postgrest.yaml

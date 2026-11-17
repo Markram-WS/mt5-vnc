@@ -9,8 +9,8 @@ resources:
   - deployment.yaml
   - service.yaml
 
-# No secretGenerator here on purpose: the base must render from the committed
-# files alone, so it can parent overlays that get their credentials elsewhere
-# (ExternalSecret on the Talos cluster). Each kind overlay generates
-# mt5-secrets from its own secrets.env, written there by scripts/kind-up.sh from
-# dev/.env (never committed, mode 0600).
+# No secretGenerator here (or in any overlay) on purpose: every root renders
+# from the committed files alone, so the credentials always come from elsewhere
+# — scripts/secrets.sh on kind, ExternalSecret from Vault on Talos. Secret
+# `mt5-secrets` is referenced `optional: true`, so a cluster with no such Secret
+# (prod) still runs.

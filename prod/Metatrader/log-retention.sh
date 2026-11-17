@@ -4,7 +4,7 @@
 # Runs every LOG_RETENTION_INTERVAL (seconds, default 86400 = daily).
 # Covers: MQL5/Logs, MQL5/Experts/Logs, MQL5/Indicators/Logs, Tester logs,
 #         terminal root logs, metaeditor.log.
-# Controlled from .env: LOG_RETENTION_DAYS, LOG_RETENTION_INTERVAL.
+# Controlled from ConfigMap mt5-env: LOG_RETENTION_DAYS, LOG_RETENTION_INTERVAL.
 
 set -e
 

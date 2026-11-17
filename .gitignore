@@ -1,11 +1,6 @@
-# Credentials — present on disk, never committed.
-/dev/.env
-/prod/.env
-/deploy/overlays/*/secrets.env
-/deploy/base/secrets.env
-# Local-only secret files (never commit; public repo)
+# The one local secret source (present on disk, never committed; public repo).
+# Template: .env.example. Read by scripts/secrets.sh, never sourced.
 /.env
-/credentials*.json
 
 # MT5 runtime state
 **/experts.dat

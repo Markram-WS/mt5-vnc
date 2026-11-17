@@ -3,11 +3,12 @@
 # HEADLESS is the single runtime switch the dev image's entrypoint reads
 # (/Metatrader/entrypoint.sh: HEADLESS=true -> headless.sh, else -> /init).
 # The prod image ignores it (its entrypoint is always headless.sh) but the
-# talos overlay still sets it to true so `kubectl describe` tells the truth.
+# talos-prod overlay still sets it to true so `kubectl describe` tells the
+# truth.
 #
 # Every key is supplied here; start.sh supplies its own defaults only as a
-# fallback. The EA auto-start keys mirror what dev/.env and prod/.env use, so
-# the EA config is identical no matter which environment is applied.
+# fallback. The EA auto-start keys mirror those fallbacks, so the EA config is
+# identical no matter which environment is applied.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -23,10 +24,10 @@ data:
   # one tree (git clone --branch accepts branches and tags, not raw SHAs).
   MQL5_GIT_URL: "https://github.com/Markram-WS/mt5-vnc.git"
   MQL5_GIT_REF: "mql5-v1"
-  # Login-profile source for the fetch-profile init container (the talos prod
+  # Login-profile source for the fetch-profile init container (the talos-prod
   # overlay only; dev mounts the host profile instead). MT5 logs in from this
-  # profile alone; there are no MT5 credentials anywhere. The talos overlay
-  # patches MINIO_URL to the in-cluster Service.
+  # profile alone; there are no MT5 credentials anywhere. The talos-prod
+  # overlay patches MINIO_URL to the in-cluster Service.
   MINIO_URL: "http://minio.tailb297d3.ts.net:9000"
   MINIO_BUCKET: "mt5"
   MINIO_PROFILE_PREFIX: "prod-demo"

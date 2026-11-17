@@ -6,7 +6,7 @@ the Talos cluster**:
 | | **dev** | **prod** |
 |---|---|---|
 | Cluster | local kind `mt5` | homelab Talos (single node) |
-| Overlay | `overlays/kind-dev` | `overlays/talos` |
+| Overlay | `overlays/kind-dev` | `overlays/talos-prod` |
 | Image | `localhost/mt5-dev:dev` (built from `dev/Dockerfile`, loaded into kind) | `markram92/mt5-prod:1.0.0` (Docker Hub, built from `prod/Dockerfile`) |
 | Base image | `gmag11/metatrader5_vnc` (~8.8 GB) | `tobix/wine:stable` (~0.8 GB) |
 | UI | KasmVNC on <http://localhost:3000> | none — `Xvfb :99`, headless |
@@ -33,8 +33,7 @@ deploy/
 │   ├── configmap.yaml         # mt5-env: non-secret env
 │   ├── deployment.yaml        # Deployment mt5: Recreate, prefix PVC, shm, probes
 │   ├── service.yaml           # Service mt5: ClusterIP, vnc 3000 + mt5linux 8001
-│   ├── kustomization.yaml     # namespace mt5 + resources (no secretGenerator)
-│   └── secrets.env.example    # CUSTOM_USER/PASSWORD only (MT5_* stay empty)
+│   └── kustomization.yaml     # namespace mt5 + resources (no Secret here)
 ├── components/
 │   ├── kind-nodeports/
 │   │   └── kustomization.yaml # Service NodePort 30300/30801 (dev only)
@@ -45,30 +44,37 @@ deploy/
 ├── apps/
 │   └── postgrest/             # PostgREST test stack, namespace mt5-data
 │       ├── namespace.yaml     # Namespace mt5-data (separate from mt5)
+│       ├── configmap.yaml     # postgres-conn: host/port/db + PostgREST URL
 │       ├── postgres.yaml      # ephemeral postgres:16-alpine + init.sql (emptyDir)
 │       ├── postgrest.yaml     # postgrest v12.2.3 + Service postgrest:3000
-│       ├── secrets.env.example # POSTGRES_USER/PASSWORD template (kind only)
-│       └── talos/             # ExternalSecret postgrest-db (Vault secret/mt5)
+│       └── talos-prod/        # ExternalSecret postgrest-db (Vault secret/mt5)
 ├── overlays/
 │   ├── kind-dev/              # DEV: the local kind cluster
-│   │   ├── kustomization.yaml # image :dev, secretGenerator + kind-nodeports
+│   │   ├── kustomization.yaml # image :dev + kind-nodeports (no secretGenerator)
 │   │   ├── profile-volume.yaml # hostPath $MT5_DATA_DIR/profile/dev/Config -> Config (rw)
 │   │   └── storage.yaml       # PV mt5-prefix-pv + PVC mt5-prefix
-│   └── talos/                 # PROD: the Talos cluster — NOT applied yet
+│   └── talos-prod/            # PROD: the Talos cluster — NOT applied yet
 │       ├── kustomization.yaml # image markram92/mt5-prod:1.0.0, NodePort 30801 only
 │       ├── storage.yaml       # PVC mt5-prefix on StorageClass local-path
 │       └── externalsecret.yaml # mt5-minio from Vault secret/mt5
 ├── clusters/
 │   └── base/
-│       └── kustomization.yaml # Flux entry point -> ../../overlays/talos
+│       └── kustomization.yaml # Flux entry point -> ../../overlays/talos-prod
 ├── kind-cluster.yaml.tmpl     # kind Cluster (placeholders @REPO_ROOT@ / @DATA_DIR@)
 ├── registries.conf            # short-name aliases (host has no /etc/containers/registries.conf)
 └── README.md
 scripts/
-├── kind-up.sh                 # dev only: build, load, apply, wait
+├── kind-up.sh                 # dev only: build, load, secrets apply, apply, wait
 ├── kind-down.sh
-└── push-image.sh              # build prod/ and push markram92/mt5-prod:<tag>
+├── push-image.sh              # build prod/ and push markram92/mt5-prod:<tag>
+└── secrets.sh                 # .env -> Secrets mt5-secrets + postgrest-db (dev)
+docs/
+└── secrets.md                 # the one page about credentials
 ```
+
+The repo root also holds `.env.example` (template for the gitignored `.env`, the
+single local secret source — see [../docs/secrets.md](../docs/secrets.md)) and
+`CONTEXT.md` (glossary).
 
 ## Usage
 
@@ -85,11 +91,21 @@ delegated cgroup scope), exports `KIND_EXPERIMENTAL_PROVIDER=podman`, creates
 the cluster if it is missing, builds `localhost/mt5-dev:dev` from `dev/`,
 imports it with `podman save` + `kind load image-archive` (kind 0.33 relies on
 `RepoTags` that podman 6 no longer reports, so `kind load docker-image` cannot
-work), applies `deploy/overlays/kind-dev`, then waits for the PVC to bind and
-the pod to become Ready.
+work), creates the cluster Secrets with `scripts/secrets.sh apply`, applies
+`deploy/overlays/kind-dev`, then waits for the PVC to bind and the pod to become
+Ready.
+
+The Secrets step is separate on purpose and must come first: the overlay
+contains no `secretGenerator`, so `kubectl apply -k` never reads a local file.
+Applying by hand is the same two commands:
+
+```bash
+./scripts/secrets.sh apply             # reads .env, needs a kind-* context
+kubectl apply -k deploy/overlays/kind-dev
+```
 
 Prod is not deployed from this script at all: build and push the image with
-`./scripts/push-image.sh <tag>`, then apply `deploy/overlays/talos` to the Talos
+`./scripts/push-image.sh <tag>`, then apply `deploy/overlays/talos-prod` to the Talos
 cluster (or let Flux do it via `deploy/clusters/base`).
 
 ## Login profile lifecycle (no MT5 credentials)
@@ -97,9 +113,10 @@ cluster (or let Flux do it via `deploy/clusters/base`).
 MT5 logs in from its **login profile**, not from environment variables: the
 `Config` directory (`accounts.dat`, `common.ini`, `servers.dat`, `hotkeys.ini`,
 `assistant.ini`, `certificates/`) that MT5 rewrites when you log in once.
-`MT5_SERVER`, `MT5_ACCOUNT` and `MT5_PASSWORD` are empty in every `secrets.env`,
-so no `/login:… /password:…` ever appears on the terminal command line or in the
-pod's process list.
+`MT5_SERVER`, `MT5_ACCOUNT` and `MT5_PASSWORD` no longer exist anywhere — not
+in the ConfigMap, not in the Secret, not in `.env` — so no `/login:… /password:…`
+ever appears on the terminal command line or in the pod's process list. Secret
+`mt5-secrets` carries only the VNC pair.
 
 | environment | where `Config` comes from |
 |---|---|
@@ -121,12 +138,13 @@ profile version. It has already been done for the current account (bucket
 Prerequisites:
 
 * `rclone` on the operator machine (the same client the init container uses).
-* `credentials.minio.mt5.json` in the repo root — gitignored, keys `url`,
-  `accessKey`, `secretKey`. **Never commit it**, and keep bucket `mt5` private:
+* `.env` at the repo root with the two MinIO keys filled in (`MINIO_ACCESS_KEY`,
+  `MINIO_SECRET_KEY` — the same pair Vault `secret/mt5` holds for prod). It is
+  gitignored: **never commit it**, and keep bucket `mt5` private —
   `accounts.dat` is enough to open the terminal on that account.
 * A reachable MinIO endpoint. From this host and from kind pods:
-  `http://minio.tailb297d3.ts.net:9000` (tailnet). The credentials file's `url`
-  may point at a local port-forward instead, so pass the endpoint explicitly.
+  `http://minio.tailb297d3.ts.net:9000` (tailnet). A local port-forward works
+  too, so pass the endpoint explicitly.
 
 1. Create the rclone remote once, without writing secrets into the repo:
 
@@ -134,8 +152,8 @@ Prerequisites:
    rclone config create mt5 s3 \
      provider Minio \
      endpoint "http://minio.tailb297d3.ts.net:9000" \
-     access_key_id "$(jq -r .accessKey credentials.minio.mt5.json)" \
-     secret_access_key "$(jq -r .secretKey credentials.minio.mt5.json)"
+     access_key_id "$(grep -E '^MINIO_ACCESS_KEY=' .env | cut -d= -f2-)" \
+     secret_access_key "$(grep -E '^MINIO_SECRET_KEY=' .env | cut -d= -f2-)"
    ```
 
 2. Copy the dev profile (whole directory: `Config/` and `Terminal/`):
@@ -368,7 +386,7 @@ Release a tree with: commit (including the compiled
 `.ex5` — a `.mq5` edit alone never changes behavior) → `git tag -a mql5-vN` →
 `git push --tags` → update `MQL5_GIT_REF` in `deploy/base/configmap.yaml` →
 `kubectl apply -k deploy/overlays/kind-dev` (dev) or `kubectl apply -k
-deploy/overlays/talos` (prod, or Flux via `deploy/clusters/base`) →
+deploy/overlays/talos-prod` (prod, or Flux via `deploy/clusters/base`) →
 `kubectl -n mt5 rollout restart deploy/mt5`. A rollback repeats those steps with
 the previous tag. Runtime MQL5 state (logs, `experts.dat`, rewritten `Profiles`)
 exists only in the `emptyDir` and is lost on restart.
@@ -408,34 +426,45 @@ a Service name is all it needs. (Dev publishes the MT5 VNC/API ports through
 `components/kind-nodeports`; the PostgREST Service is deliberately not part of
 that component.)
 
-### Secret `postgrest-db`
+### Secret `postgrest-db` and ConfigMap `postgres-conn`
 
-One Secret, **two keys** — `POSTGRES_USER` and `POSTGRES_PASSWORD` — with the
-same name in both environments so the two Deployments stay identical. Both keys
-are consumed everywhere: the postgres entrypoint creates that role (and runs
-`init.sql` as it, so it owns the schema/table/sequence), while PostgREST
-connects as it and expands it into `PGRST_DB_ANON_ROLE`. The user must therefore
-be the **same value everywhere** — Vault, the kind env file, and whatever the
-pods already hold.
+The **contract** the two environments share: Secret `postgrest-db` carries only
+**who** connects — `POSTGRES_USER` and `POSTGRES_PASSWORD` — and ConfigMap
+`postgres-conn` carries only **where** the database is:
 
-* **kind-dev** — `secretGenerator postgrest-db` in
-  `deploy/overlays/kind-dev/kustomization.yaml` reads the gitignored
-  `deploy/overlays/kind-dev/postgrest-secrets.env`, which `scripts/kind-up.sh`
-  creates on first run (`umask 077`, `POSTGRES_USER=mt5` plus
-  `openssl rand -hex 32` for the password, value never printed, an existing
-  password never overwritten). An env file written before the role was wired
-  through is migrated: the script appends the missing `POSTGRES_USER=mt5` line
-  and leaves every other line byte-identical. Template:
-  `deploy/apps/postgrest/secrets.env.example`.
-* **talos** — `ExternalSecret postgrest-db`
-  (`deploy/apps/postgrest/talos/externalsecret.yaml`) pulls properties
+| Object | Namespace | Keys |
+|---|---|---|
+| Secret `postgrest-db` | `mt5-data` | `POSTGRES_USER`, `POSTGRES_PASSWORD` |
+| ConfigMap `postgres-conn` | `mt5-data` | `POSTGRES_HOST=postgres`, `POSTGRES_PORT=5432`, `POSTGRES_DB=mt5`, `POSTGREST_URL` |
+
+A location is not a credential: it is the same in every environment, safe to
+read in `kubectl describe`, and must never need a rotation. `postgrest.yaml`
+declares the three coordinates *before* the URI (Kubernetes only expands
+`$(VAR)` to variables declared earlier):
+
+```
+PGRST_DB_URI=postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)
+```
+
+Both Secret keys are consumed everywhere: the postgres entrypoint creates that
+role (and runs `init.sql` as it, so it owns the schema/table/sequence), while
+PostgREST connects as it and expands it into `PGRST_DB_ANON_ROLE`. The user must
+therefore be the **same value everywhere** — Vault, `.env`, and whatever the pods
+already hold.
+
+* **kind-dev** — `scripts/secrets.sh apply` creates the Secret from the
+  repo-root `.env` (`POSTGRES_USER` and `POSTGRES_PASSWORD`, idempotent, values
+  never printed), before the overlay is applied. The overlay itself contains no
+  `secretGenerator`.
+* **talos-prod** — `ExternalSecret postgrest-db`
+  (`deploy/apps/postgrest/talos-prod/externalsecret.yaml`) pulls properties
   `POSTGRES_USER` and `POSTGRES_PASSWORD` from Vault `secret/mt5`. Both must
   exist **before** applying the overlay; otherwise the ExternalSecret reports
   `SecretSyncedError` and both pods sit in `CreateContainerConfigError`.
 
 The password is hex on purpose: it is embedded verbatim in `PGRST_DB_URI`
-(`postgres://<user>:<pw>@postgres:5432/mt5`), so `/`, `:` or `@` would have to
-be percent-encoded inside the URI.
+(`postgres://<user>:<pw>@<host>:<port>/<db>`), so `/`, `:` or `@` would have to
+be percent-encoded inside the URI. Generate it with `openssl rand -hex 32`.
 
 ### Operator prerequisite: the WebRequest whitelist
 
@@ -552,53 +581,20 @@ already a full reset.
 
 ## Secrets
 
-There are three secrets, and only one of them is about MT5 at all:
+Short version: the repo-root `.env` is the only local secret source, and
+`scripts/secrets.sh apply` turns it into the two Secrets the dev overlay reads
+(`mt5-secrets` in `mt5`, `postgrest-db` in `mt5-data`); prod gets the same
+Secret names from Vault through `ExternalSecret`. The overlays contain no
+`secretGenerator`, so `kubectl apply -k` never reads a local file and every
+overlay renders on a clean checkout.
 
-* **`mt5-secrets`** (kind-dev only, optional on base) — a `secretGenerator`
-  (`disableNameSuffixHash: true`) reads a `secrets.env` that sits **inside the
-  overlay** (`deploy/overlays/kind-dev/secrets.env`). It carries only the VNC
-  pair (`CUSTOM_USER`/`PASSWORD`, consumed by the dev image's KasmVNC). `MT5_*`
-  keys are present but **empty**: MT5 logs in from the profile (see "Login
-  profile lifecycle"). The base Deployment declares the ref `optional: true`, so
-  the Talos cluster runs with no such Secret at all.
-* **`mt5-minio`** (talos overlay only) — MinIO credentials for the
-  `fetch-profile` init container: `MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY`. It is
-  never created from a local file: the Talos overlay ships an `ExternalSecret`
-  that materializes it from Vault `secret/mt5`.
-* **`postgrest-db`** (namespace `mt5-data`) — `POSTGRES_USER` +
-  `POSTGRES_PASSWORD` for the PostgREST test stack, generated by `kind-up.sh`
-  into the gitignored `deploy/overlays/kind-dev/postgrest-secrets.env` on kind,
-  materialized from Vault `secret/mt5` on Talos. See "PostgREST test service".
+The key table, the Vault mapping, the credential/coordinate seam and rotation
+are in one place: [../docs/secrets.md](../docs/secrets.md). Do not duplicate
+them here.
 
-`kind-up.sh` creates `deploy/overlays/kind-dev/secrets.env` on first run from
-`dev/.env` by reading `MT5_VNC_USER` and `MT5_VNC_PASSWORD` with `grep`/`cut` —
-the file is never `source`d:
-
-| secrets.env key | Source `.env` key | Consumed as |
-|---|---|---|
-| `CUSTOM_USER` | `MT5_VNC_USER` | KasmVNC user (dev only) |
-| `PASSWORD` | `MT5_VNC_PASSWORD` | KasmVNC password (dev only) |
-| `MT5_SERVER` | — (always empty) | unused: login comes from the profile |
-| `MT5_ACCOUNT` | — (always empty) | unused |
-| `MT5_PASSWORD` | — (always empty) | unused |
-
-Every run also rewrites any pre-existing `MT5_*` value to empty, so an old
-`secrets.env` from the credential era cannot leak a password onto the terminal
-command line. `start.sh` then launches MT5 without `/login` arguments and MT5
-auto-logs in from `Config/accounts.dat`.
-
-If `dev/.env` does not exist either, the script copies
-`base/secrets.env.example` to the overlay's `secrets.env`, exits `1` and tells
-you to fill in `CUSTOM_USER`/`PASSWORD`.
-
-The overlay's `secrets.env` is generated **only when absent**, so re-running
-`kind-up.sh` never overwrites a file you already filled in. Delete
-`deploy/overlays/kind-dev/secrets.env` to regenerate it from `dev/.env`.
-
-Because this checkout is on **exFAT**, which stores no POSIX modes, `chmod 600`
-on those files is a no-op; the script verifies and prints a warning instead of
-pretending the file is private. Do not put production credentials in an exFAT
-checkout.
+This checkout is on **exFAT**, which stores no POSIX modes: `chmod 600` on `.env`
+is a no-op and the file shows as `0755`. Keep real credentials out of an exFAT
+checkout, or move it to ext4.
 
 Non-secret configuration lives in `ConfigMap mt5-env` in `base/configmap.yaml`:
 `MQL5_GIT_URL`/`MQL5_GIT_REF`, `MINIO_URL`/`MINIO_BUCKET`/
@@ -611,7 +607,7 @@ Non-secret configuration lives in `ConfigMap mt5-env` in `base/configmap.yaml`:
 
 ## Talos (prod) overlay
 
-`deploy/overlays/talos` is the prod workload — the headless image — running on
+`deploy/overlays/talos-prod` is the prod workload — the headless image — running on
 the single-node Talos cluster (`admin@homelab-cluster`, ~4 CPU / ~8 GB RAM).
 This is the only prod environment; the local kind cluster is dev-only. It shares
 the base and the `prod-headless` component, so `HEADLESS=true`, the `tini`
@@ -640,7 +636,7 @@ Preconditions for the first apply, in order:
 3. The dev pod is **stopped**: both environments log in to the same demo
    account (`26435893` on `VantageMarkets-Demo`), so never run dev and prod
    concurrently.
-4. Then `kubectl --context admin@homelab-cluster apply -k deploy/overlays/talos`
+4. Then `kubectl --context admin@homelab-cluster apply -k deploy/overlays/talos-prod`
    ("Apply"), or the Flux path ("Flux alternative").
 
 ### 1. Registry: build and push the image
@@ -689,8 +685,8 @@ the same names as the Secret keys:
 |---|---|---|
 | `MINIO_ACCESS_KEY` | `MINIO_ACCESS_KEY` | `fetch-profile` → `RCLONE_CONFIG_SRC_ACCESS_KEY_ID` |
 | `MINIO_SECRET_KEY` | `MINIO_SECRET_KEY` | `fetch-profile` → `RCLONE_CONFIG_SRC_SECRET_ACCESS_KEY` |
-| `POSTGRES_USER` | `POSTGRES_USER` | Secret `postgrest-db` (`deploy/apps/postgrest/talos/`) → the `postgres` and `postgrest` pods of the test stack (role + anon role) |
-| `POSTGRES_PASSWORD` | `POSTGRES_PASSWORD` | Secret `postgrest-db` (`deploy/apps/postgrest/talos/`) → the `postgres` and `postgrest` pods of the test stack |
+| `POSTGRES_USER` | `POSTGRES_USER` | Secret `postgrest-db` (`deploy/apps/postgrest/talos-prod/`) → the `postgres` and `postgrest` pods of the test stack (role + anon role) |
+| `POSTGRES_PASSWORD` | `POSTGRES_PASSWORD` | Secret `postgrest-db` (`deploy/apps/postgrest/talos-prod/`) → the `postgres` and `postgrest` pods of the test stack |
 
 Vault KV v2 path: **`secret/mt5`** (API path `/v1/secret/data/mt5`),
 `refreshInterval: 1h`. Write it before applying:
@@ -718,7 +714,7 @@ uploaded (see "Copying the login profile to MinIO").
 
 ```bash
 # NOT run yet — this is the manual path.
-kubectl --context admin@homelab-cluster apply -k deploy/overlays/talos
+kubectl --context admin@homelab-cluster apply -k deploy/overlays/talos-prod
 ```
 
 The overlay creates `Namespace mt5`, `ConfigMap mt5-env`, the Deployment, the
@@ -736,7 +732,7 @@ Fleet convention: app repos are registered in
 so this repo keeps the entry point under `deploy/` and the tfvars value points
 at it). Then `terraform apply` from the infra repo; Flux clones the repo and
 kustomize-builds that one directory, which resolves to
-`deploy/overlays/talos`. Nothing under `talos/` is modified by this repo.
+`deploy/overlays/talos-prod`. Nothing under `talos/` is modified by this repo.
 
 ### Cluster-specific differences from kind
 
@@ -769,9 +765,9 @@ kustomize-builds that one directory, which resolves to
 
 ## Security notes
 
-* **MT5 no longer puts credentials on a command line.** `MT5_*` is empty by
-  design, so `ps aux` inside the pod shows no `/login:/password:` — MT5 logs in
-  from `Config/accounts.dat`.
+* **MT5 never puts credentials on a command line.** There is no MT5 account
+  variable anywhere, so `ps aux` inside the pod shows no `/login:/password:` —
+  MT5 logs in from `Config/accounts.dat`.
 * **The profile is the credential now.** `accounts.dat` is enough to open the
   terminal on that account, so treat it as a secret: keep bucket `mt5` private,
   never commit the profile, and restrict `pods/exec`/`pods/log` (and local
@@ -780,16 +776,15 @@ kustomize-builds that one directory, which resolves to
   account.
 * **MinIO credentials never enter the repo.** The Talos path materializes Secret
   `mt5-minio` from Vault (`secret/mt5`); no value is printed or committed. The
-  operator's one-time upload uses the gitignored `credentials.minio.mt5.json`
-  with `rclone`, and that file is never applied to a cluster.
-* **The kind overlay's `secrets.env` sits on exFAT**, where `chmod 600` is a
-  no-op, so the file is readable by any local user who can read the checkout. It
-  holds only the VNC pair. `kind-up.sh` verifies and warns instead of implying
-  the file is private; keep real credentials out of this checkout (or move
-  `deploy/` to a POSIX filesystem).
+  operator's one-time upload reads the same pair from the gitignored `.env` with
+  `grep`/`cut` and never applies a credential file to a cluster.
+* **`.env` sits on exFAT**, where `chmod 600` is a no-op, so the file is
+  readable by any local user who can read the checkout. It holds the VNC pair,
+  the Postgres role and the MinIO keys. Keep real credentials out of this
+  checkout, or move it to a POSIX filesystem.
 * The KasmVNC UI (dev only) is published on host `:3000` with the
-  `CUSTOM_USER`/`PASSWORD` pair from that file; prod exposes only the mt5linux
-  API on `:8001` (`NodePort 30801`), with no authentication of its own.
+  `CUSTOM_USER`/`PASSWORD` pair from `Secret mt5-secrets`; prod exposes only the
+  mt5linux API on `:8001` (`NodePort 30801`), with no authentication of its own.
 
 ## Probes and limits
 
@@ -851,13 +846,33 @@ if it times out, watch progress with `kubectl -n mt5 logs deploy/mt5 -f`.
 
 ## Verifying a render without a cluster
 
+Every overlay renders from committed files alone — no local secret file is
+needed for any of them:
+
 ```bash
-kubectl kustomize deploy/base                    > /dev/null   # no local secrets needed
-kubectl kustomize deploy/overlays/kind-dev       > /dev/null   # needs overlays/kind-dev/secrets.env
-kubectl kustomize deploy/overlays/talos          > /dev/null   # no local secrets needed
+kubectl kustomize deploy/base                    > /dev/null
+kubectl kustomize deploy/overlays/kind-dev       > /dev/null
+kubectl kustomize deploy/overlays/talos-prod     > /dev/null
 kubectl kustomize deploy/clusters/base           > /dev/null   # Flux entry point
-kubectl --context admin@homelab-cluster apply --dry-run=client -k deploy/overlays/talos
-bash -n scripts/kind-up.sh && bash -n scripts/kind-down.sh && bash -n scripts/push-image.sh
+kubectl --context admin@homelab-cluster apply --dry-run=client -k deploy/overlays/talos-prod
+bash -n scripts/kind-up.sh && bash -n scripts/kind-down.sh \
+  && bash -n scripts/push-image.sh && bash -n scripts/secrets.sh
+```
+
+Assert the secret seam itself:
+
+```bash
+# No overlay bakes a Secret any more: credentials are applied out-of-band
+# (scripts/secrets.sh on kind, Vault on Talos).
+for d in deploy/base deploy/overlays/kind-dev deploy/overlays/talos-prod deploy/clusters/base; do
+  test "$(kubectl kustomize "$d" | grep -c 'kind: Secret')" -eq 0
+done
+kubectl kustomize deploy/overlays/talos-prod | grep -c 'kind: ExternalSecret'   # 2
+
+# Coordinates are a ConfigMap, and the URI references them instead of literals
+kubectl kustomize deploy/overlays/talos-prod | grep -q 'name: postgres-conn'
+kubectl kustomize deploy/overlays/kind-dev \
+  | grep -F 'value: postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)'
 ```
 
 Profile wiring is part of that check:
@@ -870,22 +885,22 @@ kubectl kustomize deploy/overlays/kind-dev | grep -c fetch-profile   # must be 0
 
 # prod: fetch-profile runs LAST (after seed-prefix/prepare-prefix) with the
 # expected bucket/prefix and the in-cluster endpoint
-kubectl kustomize deploy/overlays/talos | grep -A2 'name: fetch-profile'
-kubectl kustomize deploy/overlays/talos | grep 'MINIO_URL:'
+kubectl kustomize deploy/overlays/talos-prod | grep -A2 'name: fetch-profile'
+kubectl kustomize deploy/overlays/talos-prod | grep 'MINIO_URL:'
 ```
 
 The PostgREST test stack renders in both overlays and keeps its own namespace:
 
 ```bash
-kubectl kustomize deploy/overlays/talos | grep -c 'name: postgrest'   # 12: stack + ExternalSecret
+kubectl kustomize deploy/overlays/talos-prod | grep -c 'name: postgrest'   # 14: stack + ExternalSecret
 # kind-dev: no overlay-level namespace, the included roots bring their own
 kubectl kustomize deploy/overlays/kind-dev | grep -q 'namespace: mt5-data'
 ```
 
-`deploy/overlays/kind-dev` needs its `secrets.env` (run `kind-up.sh` once, or
-copy `deploy/base/secrets.env.example` next to the overlay's
-`kustomization.yaml`) — and, for the same reason, its
-`postgrest-secrets.env`, which `kind-up.sh` also generates on first run.
-`deploy/base`, `deploy/overlays/talos` and
-`deploy/clusters/base` render from committed files alone — that is the point of
-keeping the `secretGenerator` out of base.
+Applying needs both steps in this order, because the Secrets are not in the
+render:
+
+```bash
+./scripts/secrets.sh apply                      # .env -> Secret mt5-secrets, postgrest-db
+kubectl apply -k deploy/overlays/kind-dev
+```

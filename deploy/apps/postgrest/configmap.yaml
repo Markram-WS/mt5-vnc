@@ -1,0 +1,27 @@
+# Where the database is — deliberately NOT a Secret.
+#
+# A location is not a credential: host, port, database name and the PostgREST URL
+# are the same in every environment and are useful to read (`kubectl describe`),
+# copy into a test script or print in a log. Keeping them here means the Secret
+# holds only the two values that must never be printed (POSTGRES_USER,
+# POSTGRES_PASSWORD), and a rotation never touches this file.
+#
+# The seam: Secret `postgrest-db` carries WHO, ConfigMap `postgres-conn` carries
+# WHERE. postgres.yaml, postgrest.yaml and the smoke test all read their
+# coordinates from here, so changing the database name or port is one edit.
+#
+# POSTGREST_URL is the in-cluster address the MT5 pod's EA posts to; it is
+# published here so the test's target is visible next to the stack it tests
+# (the Service is ClusterIP only — see postgrest.yaml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-conn
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: postgrest-test
+data:
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: mt5
+  POSTGREST_URL: http://postgrest.mt5-data.svc.cluster.local:3000

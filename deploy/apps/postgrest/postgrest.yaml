@@ -32,11 +32,27 @@ spec:
           image: docker.io/postgrest/postgrest:v12.2.3@sha256:729bf65c733b73f5b52777f0e4b853f22ed73aa67a22d38269d289779b0a8401
           imagePullPolicy: IfNotPresent
           env:
-            # Declared first so the URI and the anon role below can expand
-            # $(POSTGRES_USER) / $(POSTGRES_PASSWORD); Kubernetes only expands
-            # variables defined earlier in the list. Both come from the same
+            # Coordinates first, then credentials, then the URI: Kubernetes only
+            # expands $(VAR) references to variables declared EARLIER in the
+            # list. Host/port/database come from ConfigMap postgres-conn (a
+            # location is not a credential); user/password come from the same
             # Secret the postgres pod reads, so the role cannot drift.
             # Never printed: no logs echo the URI at level info.
+            - name: POSTGRES_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: postgres-conn
+                  key: POSTGRES_HOST
+            - name: POSTGRES_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: postgres-conn
+                  key: POSTGRES_PORT
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: postgres-conn
+                  key: POSTGRES_DB
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
@@ -48,7 +64,7 @@ spec:
                   name: postgrest-db
                   key: POSTGRES_PASSWORD
             - name: PGRST_DB_URI
-              value: postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres:5432/mt5
+              value: postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)
             - name: PGRST_DB_ANON_ROLE
               value: $(POSTGRES_USER)
             - name: PGRST_DB_SCHEMAS

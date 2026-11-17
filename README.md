@@ -14,14 +14,16 @@ demo account (`26435893` on `VantageMarkets-Demo`).
 ├── mql5/         # the one MQL5 tree, fetched by both environments
 ├── dev/          # interactive image: KasmVNC UI + mt5linux API (local kind)
 ├── prod/         # headless image: mt5linux API only (Talos, Docker Hub)
-├── deploy/       # kustomize base + kind-dev / talos overlays
-└── scripts/      # kind-up.sh, kind-down.sh, push-image.sh
+├── deploy/       # kustomize base + kind-dev / talos-prod overlays
+├── docs/         # secrets.md: the one page about credentials
+├── scripts/      # kind-up.sh, kind-down.sh, push-image.sh, secrets.sh
+└── .env.example  # template for the local secret source (copy to .env)
 ```
 
 | | **dev** | **prod** |
 |---|---|---|
 | Runs on | local kind cluster (`mt5`) | Talos cluster |
-| Overlay | `deploy/overlays/kind-dev` | `deploy/overlays/talos` |
+| Overlay | `deploy/overlays/kind-dev` | `deploy/overlays/talos-prod` |
 | Image | `localhost/mt5-dev:dev` (built from `dev/`) | `markram92/mt5-prod:1.0.0` (Docker Hub, built from `prod/`) |
 | Base image | `gmag11/metatrader5_vnc` (~8.8 GB) | `tobix/wine:stable` (~0.8 GB base) |
 | UI | KasmVNC on `:3000` | none — `Xvfb :99` |
@@ -51,7 +53,7 @@ the expert.
 ## Deployment
 
 `deploy/` is one `Deployment/mt5` in namespace `mt5`, rendered by one overlay per
-environment — `kind-dev` for the local dev cluster, `talos` for prod:
+environment — `kind-dev` for the local dev cluster, `talos-prod` for prod:
 
 * `deploy/base/` — namespace, ConfigMap `mt5-env`, Deployment, Service
   (ClusterIP, VNC 3000 + mt5linux 8001). No secret: it has to render from
@@ -62,17 +64,18 @@ environment — `kind-dev` for the local dev cluster, `talos` for prod:
   MT5 login profile from MinIO (bucket `mt5`, prefix `prod-demo`) on the first
   start, then never touches it again.
 * `deploy/overlays/kind-dev` — **dev**: image `localhost/mt5-dev:dev`, UI
-  enabled, NodePorts `30300`/`30801`, `secretGenerator` from its own
-  `secrets.env`, and the host dir `$MT5_DATA_DIR/profile/dev/Config` mounted
-  read-write over the terminal's `Config`.
-* `deploy/overlays/talos` — **prod**: image `markram92/mt5-prod:1.0.0`,
+  enabled, NodePorts `30300`/`30801`, Secrets applied out-of-band by
+  `scripts/secrets.sh` from `/.env`, and the host dir
+  `$MT5_DATA_DIR/profile/dev/Config` mounted read-write over the terminal's
+  `Config`.
+* `deploy/overlays/talos-prod` — **prod**: image `markram92/mt5-prod:1.0.0`,
   headless, `fetch-profile` enabled, `ExternalSecret` for the MinIO credentials,
   in-cluster MinIO endpoint, `local-path` PVC, only the API on NodePort `30801`.
   **Not applied yet** — see
   [deploy/README.md](deploy/README.md#talos-prod-overlay) for the registry,
   Vault, apply and Flux steps.
 * `deploy/clusters/base` — the Flux entry point; it resolves to
-  `deploy/overlays/talos` (prod only).
+  `deploy/overlays/talos-prod` (prod only).
 
 ### Login profile (no MT5 credentials)
 
@@ -99,7 +102,7 @@ and the re-seed procedure for a password rotation are in
 
 ### Talos (prod)
 
-Prod runs on the homelab Talos cluster as `deploy/overlays/talos` (Docker Hub
+Prod runs on the homelab Talos cluster as `deploy/overlays/talos-prod` (Docker Hub
 image `markram92/mt5-prod:1.0.0`, `fetch-profile` against the in-cluster MinIO
 Service, Vault-backed `mt5-minio` credentials via `ExternalSecret`,
 `local-path` PVC, API on NodePort `30801`) and is **not applied yet**.
@@ -117,7 +120,7 @@ the login has to be repeated (credentials are never printed).
 
 Outstanding before the first apply: the two Vault properties under `secret/mt5`
 (`MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`), then
-`kubectl --context admin@homelab-cluster apply -k deploy/overlays/talos` (or the
+`kubectl --context admin@homelab-cluster apply -k deploy/overlays/talos-prod` (or the
 Flux registration). The one-time login-profile copy to MinIO (`mt5/prod-demo/`)
 is already done, and because dev and prod use the **same demo account** the dev
 pod must be stopped while prod runs. The manual apply and Flux steps are in
@@ -131,7 +134,7 @@ Pods never read this checkout: `fetch-mql5` clones `MQL5_GIT_URL` at
 alone changes nothing) → `git tag -a mql5-vN` → `git push --tags` → point
 `MQL5_GIT_REF` at the new tag in `deploy/base/configmap.yaml` →
 `kubectl apply -k deploy/overlays/kind-dev` (dev) or the Talos cluster's Flux
-sync / `kubectl apply -k deploy/overlays/talos` (prod) →
+sync / `kubectl apply -k deploy/overlays/talos-prod` (prod) →
 `kubectl -n mt5 rollout restart deploy/mt5`. Rolling back is the same steps
 with the previous tag. Runtime MQL5 state (logs, `experts.dat`, rewritten
 `Profiles`) lives only in that `emptyDir` and is lost when the pod restarts.
@@ -163,30 +166,28 @@ UNIX symlinks, and a prefix on exFAT fails with `STATUS_DLL_NOT_FOUND`
 ./scripts/kind-down.sh
 ```
 
-`kind-up.sh` creates `deploy/overlays/kind-dev/secrets.env` from `dev/.env` on
-first run, builds `localhost/mt5-dev:dev`, loads it into kind and waits for the
-pod to become Ready (a cold prefix installs Mono, Wine Python and MT5, so the
-first rollout takes minutes). Prod is published separately with
-`./scripts/push-image.sh <tag>` and applied on Talos.
+`kind-up.sh` calls `scripts/secrets.sh apply` (which reads `.env` at the repo
+root) before applying the overlay, builds `localhost/mt5-dev:dev`, loads it into
+kind and waits for the pod to become Ready (a cold prefix installs Mono, Wine
+Python and MT5, so the first rollout takes minutes). Prod is published
+separately with `./scripts/push-image.sh <tag>` and applied on Talos.
 
-Render an overlay without a cluster:
+Render an overlay without a cluster — no local secret file is needed, because
+every overlay renders from committed files alone:
 
 ```bash
-cp deploy/base/secrets.env.example deploy/overlays/kind-dev/secrets.env   # once
 kubectl kustomize deploy/overlays/kind-dev
-kubectl kustomize deploy/overlays/talos          # no local secrets needed
+kubectl kustomize deploy/overlays/talos-prod
 ```
 
 ## Secrets
 
-There are no MT5 credentials in this repo any more. `dev/.env` and
-`deploy/overlays/kind-dev/secrets.env` hold only the VNC user/password (`MT5_*`
-is empty and is re-blanked by `kind-up.sh`); they exist on disk only, are
-gitignored, and `deploy/base/secrets.env.example` documents the keys. The
-kind-dev overlay generates its Secret from its own `secrets.env`; the Talos
-overlay takes its MinIO credentials from Vault (`secret/mt5`) via an
-`ExternalSecret`. The login profile itself is a secret: bucket `mt5` stays
-private, and `credentials.minio.mt5.json` is never committed.
+`/.env` (gitignored, template `.env.example`) is the only local secret source:
+`scripts/secrets.sh apply` turns it into the two Secrets the dev overlay reads,
+and prod gets the same Secret names from Vault through `ExternalSecret`. No
+credential is ever in a manifest, so every overlay renders from committed files
+alone. Everything else — key table, rotation, what is not a secret — is in
+[docs/secrets.md](docs/secrets.md).
 
 ## Documentation
 
@@ -194,5 +195,8 @@ private, and `credentials.minio.mt5.json` is never committed.
 * [prod/README.md](prod/README.md) — prod image: quickstart, dynamic config.
 * [prod/ARCHITECTURE.md](prod/ARCHITECTURE.md) — how the dev and prod images
   differ and what they share.
+* [docs/secrets.md](docs/secrets.md) — the one page about credentials: `.env`,
+  the two Secrets, Vault, rotation.
 * [deploy/README.md](deploy/README.md) — kustomize layout, prefix seeding,
   kind cluster, storage semantics, pins and deviations.
+* [CONTEXT.md](CONTEXT.md) — glossary of the terms this repo deploys.

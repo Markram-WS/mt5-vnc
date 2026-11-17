@@ -6,4 +6,4 @@ kind: Kustomization
 # it). It contains nothing but the app overlay, so registering the repo does not
 # need a second kustomization.
 resources:
-  - ../../overlays/talos
+  - ../../overlays/talos-prod

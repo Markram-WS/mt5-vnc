@@ -7,7 +7,7 @@ Configuration is fully dynamic via the `mt5-env` ConfigMap — no rebuild needed
 for a different EA / symbol / timeframe.
 
 It is the **prod** image: it runs on the Talos cluster (overlay
-`deploy/overlays/talos`, image `markram92/mt5-prod:<tag>` from Docker Hub). Build
+`deploy/overlays/talos-prod`, image `markram92/mt5-prod:<tag>` from Docker Hub). Build
 and push it with `./scripts/push-image.sh <tag>`; the local kind cluster is
 dev-only and never runs this image.
 
@@ -21,7 +21,7 @@ dev-only and never runs this image.
 | Image | `localhost/mt5-dev:dev` (base ~8.8GB) | `markram92/mt5-prod:<tag>` (base ~2.7GB) |
 | GUI | KasmVNC on host 3000 | none (headless, no `xdotool`) |
 | mt5linux API | host 8001 | host 8001 |
-| Config source | `deploy/base/configmap.yaml` / `kind-dev` overlay | same base / `talos` overlay |
+| Config source | `deploy/base/configmap.yaml` / `kind-dev` overlay | same base / `talos-prod` overlay |
 | EA auto-start | `startup.ini` written by `start.sh` | same as dev |
 | MQL5 source | git clone at `MQL5_GIT_REF` → pod `emptyDir` | same |
 | Prefix | host `$MT5_DATA_DIR/prefix` (kind PV) | PVC `mt5-prefix` (Talos `local-path`) |
@@ -54,7 +54,7 @@ dev-only and never runs this image.
 podman login docker.io                          # once
 ./scripts/push-image.sh                         # builds prod/, pushes 1.0.0
 # dev and prod use the SAME demo account — stop dev before prod logs in.
-kubectl --context admin@homelab-cluster apply -k deploy/overlays/talos
+kubectl --context admin@homelab-cluster apply -k deploy/overlays/talos-prod
 
 # Pod: mt5-… | API port: 30801 (NodePort) | no UI (no VNC in this image)
 ```
@@ -98,7 +98,7 @@ git push origin main
 # new tag for a reproducible release:
 git tag -a mql5-v2 -m "MQL5 tree with MyRobot" && git push origin mql5-v2
 # point MQL5_GIT_REF at the new tag, then:
-kubectl apply -k deploy/overlays/talos
+kubectl apply -k deploy/overlays/talos-prod
 kubectl -n mt5 rollout restart deploy/mt5
 ```
 
@@ -143,7 +143,7 @@ git add -f mql5/Experts/MyRobot.* && git commit -m "Add MyRobot" && git push
 #                               MT5_AUTO_START_SYMBOL: "GBPUSD"
 
 # 3) apply + restart
-kubectl apply -k deploy/overlays/talos
+kubectl apply -k deploy/overlays/talos-prod
 kubectl -n mt5 rollout restart deploy/mt5
 ```
 
@@ -193,7 +193,7 @@ see §7.
 
 ```bash
 ./scripts/push-image.sh                       # build prod/ + push tag 1.0.0
-kubectl --context admin@homelab-cluster apply -k deploy/overlays/talos
+kubectl --context admin@homelab-cluster apply -k deploy/overlays/talos-prod
 kubectl -n mt5 get pods                       # Ready 1/1
 kubectl -n mt5 logs -f deploy/mt5             # all logs on stdout
 kubectl -n mt5 logs deploy/mt5 -c fetch-mql5  # which MQL5 tree was cloned
@@ -213,7 +213,7 @@ kubectl --context kind-mt5 rollout scale deploy/mt5 --replicas=0
   from Vault `secret/mt5` by the overlay's `ExternalSecret` (no local file, no
   `MT5_*` credentials at all: login comes from the seeded profile)
 - Prod deltas (image, `HEADLESS`, entrypoint, resources) → the shared
-  `prod-headless` component, pinned by the overlay in `deploy/overlays/talos`
+  `prod-headless` component, pinned by the overlay in `deploy/overlays/talos-prod`
 - MQL5 / data → cloned from git at start; runtime writes stay in the pod's
   `emptyDir` and disappear with it
 
